@@ -1,0 +1,35 @@
+[
+  {
+    "id": "speedster_penguin",
+    "displayName": "스피드 펭귄",
+    "roleType": "speed",
+    "baseSpeed": 305,
+    "jumpPower": 540,
+    "skillId": "rush_boost",
+    "cooldownSec": 14,
+    "unlockCondition": "default",
+    "quote": "바람을 가르며 마케팅 임무 개시!"
+  },
+  {
+    "id": "steady_seal",
+    "displayName": "스테디 물개",
+    "roleType": "stable",
+    "baseSpeed": 278,
+    "jumpPower": 565,
+    "skillId": "safe_shield",
+    "cooldownSec": 16,
+    "unlockCondition": "default",
+    "quote": "안정적인 완주가 최고의 설득이다!"
+  },
+  {
+    "id": "spark_fox",
+    "displayName": "스파크 폭스",
+    "roleType": "skill",
+    "baseSpeed": 290,
+    "jumpPower": 550,
+    "skillId": "time_slow",
+    "cooldownSec": 15,
+    "unlockCondition": "campaign_share_1",
+    "quote": "지금 이 순간의 주목도를 끌어올려!"
+  }
+]
