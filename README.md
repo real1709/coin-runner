@@ -11,7 +11,7 @@
 (`file://` 실행 호환을 위해 `src/main.bundle.js` 단일 스크립트를 기본 로더로 사용합니다.)
 
 ## 2) 핵심 스펙
-- 버전: `v1.1.1`
+- 버전: `v1.1.2`
 - 진행 방식: 원근 기반 세로 무한 러너
 - 레인: 5레인 좌우 이동
 - 조작: 좌/우 이동(좌측 탭/우측 탭 또는 ←/→, A/D, 모바일 좌/우 버튼)
@@ -21,6 +21,8 @@
 - 루프: 플레이 -> 충돌/생존 게이지 소진 -> 결과 -> 즉시 재도전
 - 캐릭터: 단일 펭귄 러너, 7프레임 러닝 애니메이션
 - 적 패턴: 적 캐릭터가 플레이어 위치를 향해 투사체 발사
+- 장애물 패턴: 두 칸 폭 근육 두더지, 좌/우 한 칸씩 움직이는 이동 적군
+- 아이템: 무한 부스터 아이템, 획득 후 일정 시간 무적/가속
 - 충돌 판정: 동전/장애물/적군/투사체 모두 실제 화면 충돌 박스 기준
 - UI: 거리/단계 HUD, 생존 게이지, pause/play 버튼, 거리 순위 결과 화면
 - 마케팅 기능: 공유 버튼
@@ -43,10 +45,10 @@
 - 설정 검증: `npm run validate:config`
 
 ## 5) 배포 3종 세트
-- 버전 태그: `v1.1.1`
+- 버전 태그: `v1.1.2`
 - 웹 URL: `release/artifact-manifest.json`의 `webUrl`
 - 변경로그: `CHANGELOG.md`
-- 저장 스냅샷: `release/v1.1.1`
+- 저장 스냅샷: `release/v1.1.2`
 
 ## 6) 계획 문서
 - 1주 실행 일정: `docs/EXECUTION_SCHEDULE.md`
@@ -58,6 +60,9 @@
 - 상단 `IP_THEME`에서 아래 슬롯을 교체:
   - `runner.frameImages`: 플레이어 러너 프레임
   - `holeEnemy.imageSrc`: 적 캐릭터
+  - `moleObstacle.imageSrc`: 두 칸 폭 두더지 장애물
+  - `movingEnemy.imageSrc`: 좌/우 이동 적군
+  - `booster.imageSrc`: 무한 부스터 아이템
   - `projectile.imageSrc`: 투사체
   - `collectible.imageSrc`: 수집 오브젝트
 - `imageSrc`에 로컬 이미지 경로를 넣으면 해당 이미지로 렌더링됩니다. 비워두면 색상+라벨 박스로 표시됩니다.

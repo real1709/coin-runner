@@ -1,11 +1,19 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "v1.1.1";
+  const APP_VERSION = "v1.1.2";
   const MISSION_SCORE_TARGET = 1200;
   const MISSION_DISTANCE_TARGET = 900;
   const MISSION_COLLECTIBLE_TARGET = 7;
   const COLLECTIBLE_BASE_SCORE = 110;
+  const BOOSTER_BASE_SCORE = 360;
+  const POWERUP_SPAWN_MIN_SEC = 2.2;
+  const POWERUP_SPAWN_MAX_SEC = 12.4;
+  const POWERUP_COOLDOWN_AFTER_USE_SEC = 20;
+  const POWERUP_RESPAWN_RANDOM_MIN_SEC = 1.8;
+  const POWERUP_RESPAWN_RANDOM_MAX_SEC = 6.2;
+  const BOOSTER_DURATION_SEC = 5.5;
+  const BOOSTER_SPEED_MULTIPLIER = 1.62;
   const DISTANCE_UNITS_PER_METER = 42;
   const SPEEDUP_TIME_STEP_SEC = 15;
   const SPEEDUP_BONUS_PER_STEP = 42;
@@ -16,6 +24,10 @@
   const ENEMY_SPAWN_LEAD_PER_TIER = 0.08;
   const ENEMY_SPAWN_LEAD_MAX = 0.42;
   const HIGH_TIER_ENEMY_WEIGHT_BONUS = 0.1;
+  const MOLE_START_SPEED_TIER = 2;
+  const MOLE_START_SPAWN_RATIO = 0.25;
+  const MOLE_RATIO_DROP_PER_TIER = 0.02;
+  const MOLE_MIN_SPAWN_RATIO = 0.08;
   const SURVIVAL_MAX = 100;
   const SURVIVAL_DECAY_PER_SEC = 8.6;
   const SURVIVAL_DECAY_PER_LEVEL = 0.7;
@@ -103,6 +115,21 @@
       name: "회사IP_수집캐릭터",
       color: "#f0b245",
       imageSrc: ""
+    },
+    booster: {
+      name: "회사IP_무한부스터",
+      color: "#ff4772",
+      imageSrc: "./assets/booster_rocket.png"
+    },
+    moleObstacle: {
+      name: "회사IP_두더지",
+      color: "#a96532",
+      imageSrc: "./assets/mole_pop.png"
+    },
+    movingEnemy: {
+      name: "회사IP_이동적",
+      color: "#27c8bd",
+      imageSrc: "./assets/moving_enemy.png"
     },
     projectile: {
       name: "회사IP_응가투사체",
@@ -222,14 +249,14 @@
     {
       stageId: 3,
       durationSec: 26,
-      obstacleSet: ["hole_enemy_fast", "moving_crate", "storm_gate"],
+      obstacleSet: ["hole_enemy_fast", "moving_crate", "slope_hole"],
       spawnPattern: {
         minGap: 0.72,
         maxGap: 1.2,
         weights: {
-          hole_enemy_fast: 0.4,
-          moving_crate: 0.4,
-          storm_gate: 0.2
+          hole_enemy_fast: 0.48,
+          moving_crate: 0.34,
+          slope_hole: 0.2
         }
       },
       difficultyTier: "hard",
@@ -530,6 +557,11 @@
     collectibleSpawnIn: 1.4,
     collectibleSpawnTimer: 0,
     collectedTokens: 0,
+    boosterTimer: 0,
+    boostersCollected: 0,
+    powerupCooldownUntil: 0,
+    powerupSpawnedTiers: {},
+    powerupSpawnAtByTier: {},
     moveLeftQueued: false,
     moveRightQueued: false,
     skillCooldown: 0,
@@ -551,19 +583,19 @@
   };
 
   const obstacleCatalog = {
-    hole_enemy: { width: 56, height: 54, color: "#6a3950", lane: "hole_pop" },
+    hole_enemy: { width: 70, height: 68, color: "#6a3950", lane: "hole_pop" },
     hole_enemy_fast: {
-      width: 60,
-      height: 58,
+      width: 74,
+      height: 72,
       color: "#76334c",
       lane: "hole_pop"
     },
     ice_crack: { width: 46, height: 24, color: "#4f84ad", lane: "ground" },
     small_block: { width: 40, height: 42, color: "#699ec5", lane: "ground" },
     ice_wall: { width: 48, height: 58, color: "#52789a", lane: "ground" },
-    slope_hole: { width: 60, height: 28, color: "#466f90", lane: "ground" },
+    slope_hole: { width: 128, height: 156, color: "#a96532", lane: "mole_pop", laneSpan: 2 },
     storm_gate: { width: 52, height: 66, color: "#395f81", lane: "ground" },
-    moving_crate: { width: 44, height: 50, color: "#2f4c66", lane: "moving" },
+    moving_crate: { width: 70, height: 86, color: "#27c8bd", lane: "moving" },
     laser_sign: { width: 72, height: 16, color: "#c73f3f", lane: "overhead" }
   };
 
@@ -577,7 +609,14 @@
       return;
     }
     const image = new Image();
-    if (key === "projectile" || key.indexOf("runnerFrame") === 0) {
+    if (
+      key === "projectile" ||
+      key === "booster" ||
+      key === "holeEnemy" ||
+      key === "moleObstacle" ||
+      key === "movingEnemy" ||
+      key.indexOf("runnerFrame") === 0
+    ) {
       image.addEventListener("load", function () {
         spriteMeta[key] = detectForegroundRect(image);
       });
@@ -864,6 +903,42 @@
       Math.PI * 2
     );
     ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBoosterAura(player, pose) {
+    if (!isBoosterActive()) {
+      return;
+    }
+
+    const pulse = 0.5 + Math.sin(runtime.totalElapsed * 18) * 0.5;
+    const centerX = player.x + player.width * 0.5 + (pose ? pose.x * 0.35 : 0);
+    const centerY = player.y + player.height * 0.52;
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(80, 235, 255, " + (0.34 + pulse * 0.18).toFixed(3) + ")";
+    ctx.lineWidth = 2.2 + pulse * 1.2;
+    ctx.beginPath();
+    ctx.ellipse(
+      centerX,
+      centerY,
+      player.width * (0.78 + pulse * 0.08),
+      player.height * (0.58 + pulse * 0.05),
+      0,
+      0,
+      Math.PI * 2
+    );
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(255, 244, 137, 0.34)";
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 3; i += 1) {
+      const y = player.y + player.height * (0.38 + i * 0.18);
+      ctx.beginPath();
+      ctx.moveTo(centerX - player.width * (0.95 + i * 0.2), y + pulse * 3);
+      ctx.lineTo(centerX - player.width * (0.35 + i * 0.08), y - 4);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -1175,6 +1250,11 @@
     runtime.collectibleSpawnTimer = 0;
     runtime.collectibleSpawnIn = randomRange(0.58, 0.98);
     runtime.collectedTokens = 0;
+    runtime.boosterTimer = 0;
+    runtime.boostersCollected = 0;
+    runtime.powerupCooldownUntil = 0;
+    runtime.powerupSpawnedTiers = {};
+    runtime.powerupSpawnAtByTier = {};
     runtime.moveLeftQueued = false;
     runtime.moveRightQueued = false;
     runtime.skillCooldown = 0;
@@ -1294,6 +1374,32 @@
     return SURVIVAL_DECAY_PER_SEC + speedTier * SURVIVAL_DECAY_PER_LEVEL;
   }
 
+  function isBoosterActive() {
+    return runtime.boosterTimer > 0;
+  }
+
+  function startPowerupCooldown() {
+    runtime.powerupCooldownUntil = runtime.totalElapsed + POWERUP_COOLDOWN_AFTER_USE_SEC;
+    runtime.powerupSpawnAtByTier = {};
+  }
+
+  function activateBooster(character) {
+    runtime.boosterTimer = BOOSTER_DURATION_SEC;
+    runtime.boostersCollected += 1;
+    startPowerupCooldown();
+    runtime.score += BOOSTER_BASE_SCORE;
+    runtime.survivalGauge = Math.min(SURVIVAL_MAX, runtime.survivalGauge + 10);
+    showOverlay("무한 부스터!!", 900, "top");
+    emitTelemetry("collect_booster", {
+      characterId: character.id,
+      stageId: runtime.speedTier + 1,
+      distance: Math.round(runtime.distanceMeters),
+      boosterCount: runtime.boostersCollected,
+      score: Math.round(runtime.score),
+      survivalGauge: Math.round(runtime.survivalGauge)
+    });
+  }
+
   function currentApproachMultiplier() {
     const speedTier = Number.isFinite(runtime.speedTier) ? runtime.speedTier : 0;
     const levelBonus = Math.min(
@@ -1323,6 +1429,53 @@
     return randomRange(-0.14 - leadDepth, 0.06 - leadDepth * 0.75);
   }
 
+  function currentMoleSpawnRatio() {
+    const speedTier = Number.isFinite(runtime.speedTier) ? runtime.speedTier : 0;
+    if (speedTier < MOLE_START_SPEED_TIER) {
+      return 0;
+    }
+    return Math.max(
+      MOLE_MIN_SPAWN_RATIO,
+      MOLE_START_SPAWN_RATIO -
+        (speedTier - MOLE_START_SPEED_TIER) * MOLE_RATIO_DROP_PER_TIER
+    );
+  }
+
+  function randomMovingObstacleDirection(lane) {
+    const candidates = [];
+    if (lane > 0) {
+      candidates.push(-1);
+    }
+    if (lane < LANE_COUNT - 1) {
+      candidates.push(1);
+    }
+    if (!candidates.length) {
+      return 0;
+    }
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
+
+  function updateMovingObstacle(obstacle, dt) {
+    if (!Number.isFinite(obstacle.visualLane)) {
+      obstacle.visualLane = obstacle.lane;
+    }
+    obstacle.wobble += dt * 5.2;
+    obstacle.laneOffset = 0;
+
+    if (obstacle.depth > 0.16 && obstacle.depth < 0.95) {
+      obstacle.moveCooldown -= dt;
+      const nearTargetLane = Math.abs(obstacle.visualLane - obstacle.lane) < 0.06;
+      if (obstacle.moveCooldown <= 0 && nearTargetLane) {
+        const direction = randomMovingObstacleDirection(obstacle.lane);
+        obstacle.lane = Math.max(0, Math.min(LANE_COUNT - 1, obstacle.lane + direction));
+        obstacle.moveCooldown = randomRange(0.52, 0.92);
+      }
+    }
+
+    const laneDrift = obstacle.lane - obstacle.visualLane;
+    obstacle.visualLane += laneDrift * Math.min(1, dt * 7.2);
+  }
+
   function currentObstacleWeights(stage) {
     const weights = Object.assign({}, stage.spawnPattern.weights);
     if (runtime.speedTier >= 4) {
@@ -1332,6 +1485,21 @@
         }
       });
     }
+    if (stage.obstacleSet.indexOf("slope_hole") !== -1) {
+      const moleRatio = currentMoleSpawnRatio();
+      if (moleRatio > 0) {
+        let otherWeightTotal = 0;
+        stage.obstacleSet.forEach(function (type) {
+          if (type !== "slope_hole") {
+            otherWeightTotal += Number(weights[type] || 0);
+          }
+        });
+        weights.slope_hole =
+          otherWeightTotal > 0
+            ? (otherWeightTotal * moleRatio) / (1 - moleRatio)
+            : Number(weights.slope_hole || 0);
+      }
+    }
     return weights;
   }
 
@@ -1339,12 +1507,17 @@
     const stage = currentStage();
     const obstacleType = weightedPick(currentObstacleWeights(stage), stage.obstacleSet);
     const base = obstacleCatalog[obstacleType];
-    const lane = Math.floor(Math.random() * LANE_COUNT);
+    const laneSpan = Math.max(1, Math.min(LANE_COUNT, Math.round(base.laneSpan || 1)));
+    const maxStartLane = Math.max(0, LANE_COUNT - laneSpan);
+    const lane = Math.floor(Math.random() * (maxStartLane + 1));
     runtime.obstacles.push({
       type: obstacleType,
       depth: enemyAwareSpawnDepth(base),
       lane: lane,
+      laneSpan,
       laneOffset: 0,
+      visualLane: lane,
+      moveCooldown: base.lane === "moving" ? randomRange(0.28, 0.62) : 0,
       width: base.width,
       height: base.height,
       color: base.color,
@@ -1373,9 +1546,53 @@
     return deduped;
   }
 
+  function shouldSpawnPowerupItem() {
+    if (isBoosterActive()) {
+      return false;
+    }
+    if (runtime.totalElapsed < runtime.powerupCooldownUntil) {
+      return false;
+    }
+    const tier = Number.isFinite(runtime.speedTier) ? runtime.speedTier : 0;
+    const tierKey = String(tier);
+    const elapsedInTier = runtime.totalElapsed - tier * SPEEDUP_TIME_STEP_SEC;
+    if (!Number.isFinite(runtime.powerupSpawnAtByTier[tierKey])) {
+      const maxSpawnAt = Math.min(POWERUP_SPAWN_MAX_SEC, SPEEDUP_TIME_STEP_SEC - 1.4);
+      let minSpawnAt = POWERUP_SPAWN_MIN_SEC;
+      if (runtime.powerupCooldownUntil > 0) {
+        minSpawnAt = Math.max(
+          minSpawnAt,
+          elapsedInTier + randomRange(POWERUP_RESPAWN_RANDOM_MIN_SEC, POWERUP_RESPAWN_RANDOM_MAX_SEC)
+        );
+      }
+      runtime.powerupSpawnAtByTier[tierKey] =
+        minSpawnAt <= maxSpawnAt ? randomRange(minSpawnAt, maxSpawnAt) : Infinity;
+    }
+    return (
+      !runtime.powerupSpawnedTiers[tierKey] &&
+      elapsedInTier >= runtime.powerupSpawnAtByTier[tierKey]
+    );
+  }
+
   function spawnCollectible() {
     const lanes = collectibleLaneOrder();
     const panicMode = runtime.survivalGauge < 34;
+    if (shouldSpawnPowerupItem()) {
+      const laneIndex = Math.random() < 0.68 ? 0 : Math.min(1, lanes.length - 1);
+      runtime.collectibles.push({
+        kind: "booster",
+        depth: randomRange(-0.24, 0.02),
+        lane: lanes[laneIndex],
+        laneOffset: 0,
+        width: collectibleConfig.width * 1.62,
+        height: collectibleConfig.height * 1.5,
+        wobble: Math.random() * Math.PI * 2,
+        passed: false
+      });
+      runtime.powerupSpawnedTiers[String(runtime.speedTier)] = true;
+      return;
+    }
+
     let waveSize = Math.random() < 0.62 ? 2 : 1;
     if (Math.random() < 0.28 + Math.min(0.18, runtime.speedTier * 0.02)) {
       waveSize += 1;
@@ -1390,6 +1607,7 @@
         depth: baseDepth - i * randomRange(0.035, 0.08),
         lane: lanes[i % lanes.length],
         laneOffset: 0,
+        kind: "coin",
         width: collectibleConfig.width,
         height: collectibleConfig.height,
         wobble: Math.random() * Math.PI * 2,
@@ -1472,13 +1690,56 @@
     return dx * dx + dy * dy <= circle.radius * circle.radius;
   }
 
+  function clamp01(value) {
+    return Math.max(0, Math.min(1, value));
+  }
+
+  function moleRiseRatio(obstacle) {
+    const rawRise = (obstacle.depth - 0.08) / 0.46;
+    const clampedRise = clamp01(rawRise);
+    return 1 - Math.pow(1 - clampedRise, 3);
+  }
+
+  function moleVisibleRatio(obstacle) {
+    return 0.24 + moleRiseRatio(obstacle) * 0.7;
+  }
+
+  function obstacleLaneSpan(obstacle) {
+    const safeLane = Math.max(0, Math.min(LANE_COUNT - 1, obstacle.lane || 0));
+    const requestedSpan = Math.max(1, Math.round(obstacle.laneSpan || 1));
+    return Math.max(1, Math.min(LANE_COUNT - safeLane, requestedSpan));
+  }
+
   function getObstacleDrawInfo(obstacle) {
-    const projected = projectLanePoint(
-      obstacle.lane,
+    const renderLane = Number.isFinite(obstacle.visualLane)
+      ? obstacle.visualLane
+      : obstacle.lane;
+    const baseProjected = projectLanePoint(
+      renderLane,
       obstacle.depth,
       obstacle.laneOffset
     );
-    const maxLaneRatio = obstacle.moveLane === "hole_pop" ? 0.72 : 0.64;
+    const laneSpan = obstacleLaneSpan(obstacle);
+    const safeLane = Math.max(0, Math.min(LANE_COUNT - 1, obstacle.lane || 0));
+    let projected = baseProjected;
+    if (laneSpan > 1) {
+      const left = roadBoundaryX(safeLane, baseProjected.roadEase);
+      const right = roadBoundaryX(safeLane + laneSpan, baseProjected.roadEase);
+      const spanWidth = right - left;
+      projected = Object.assign({}, baseProjected, {
+        x: (left + right) * 0.5 + (obstacle.laneOffset || 0) * spanWidth * 0.18,
+        laneWidth: spanWidth,
+        laneSpan
+      });
+    }
+    const maxLaneRatio =
+      obstacle.moveLane === "mole_pop"
+        ? 0.9
+        : obstacle.moveLane === "hole_pop"
+        ? 0.9
+        : obstacle.moveLane === "moving"
+        ? 0.88
+        : 0.64;
     const size = centeredDrawSize(
       obstacle.width,
       obstacle.height,
@@ -1497,10 +1758,29 @@
     const info = getObstacleDrawInfo(obstacle);
     if (obstacle.moveLane === "hole_pop") {
       return {
-        left: info.drawX + info.drawWidth * 0.2,
-        right: info.drawX + info.drawWidth * 0.8,
-        top: info.drawY + info.drawHeight * 0.06,
+        left: info.drawX + info.drawWidth * 0.16,
+        right: info.drawX + info.drawWidth * 0.84,
+        top: info.drawY + info.drawHeight * 0.08,
         bottom: info.drawY + info.drawHeight * 0.9
+      };
+    }
+    if (obstacle.moveLane === "mole_pop") {
+      const holeY = info.drawY + info.drawHeight * 0.92;
+      const visibleRatio = moleVisibleRatio(obstacle);
+      const visibleTop = holeY - info.drawHeight * visibleRatio;
+      return {
+        left: info.drawX + info.drawWidth * 0.1,
+        right: info.drawX + info.drawWidth * 0.9,
+        top: visibleTop + info.drawHeight * 0.08,
+        bottom: holeY - info.drawHeight * 0.08
+      };
+    }
+    if (obstacle.moveLane === "moving") {
+      return {
+        left: info.drawX + info.drawWidth * 0.16,
+        right: info.drawX + info.drawWidth * 0.84,
+        top: info.drawY + info.drawHeight * 0.08,
+        bottom: info.drawY + info.drawHeight * 0.92
       };
     }
     return {
@@ -1619,11 +1899,13 @@
     runtime.rushTimer = Math.max(0, runtime.rushTimer - dt);
     runtime.shieldTimer = Math.max(0, runtime.shieldTimer - dt);
     runtime.slowTimer = Math.max(0, runtime.slowTimer - dt);
+    runtime.boosterTimer = Math.max(0, runtime.boosterTimer - dt);
     runtime.blinkTimer = Math.max(0, runtime.blinkTimer - dt);
     runtime.sideRecoverCooldown = Math.max(0, runtime.sideRecoverCooldown - dt);
+    const survivalDecay = isBoosterActive() ? 0 : currentSurvivalDecayPerSec();
     runtime.survivalGauge = Math.max(
       0,
-      runtime.survivalGauge - currentSurvivalDecayPerSec() * dt
+      runtime.survivalGauge - survivalDecay * dt
     );
     if (runtime.survivalGauge <= 0) {
       emitTelemetry("survival_empty", {
@@ -1643,8 +1925,9 @@
     );
     const rushMultiplier = runtime.rushTimer > 0 ? 1.28 : 1;
     const slowMultiplier = runtime.slowTimer > 0 ? 0.68 : 1;
+    const boosterMultiplier = isBoosterActive() ? BOOSTER_SPEED_MULTIPLIER : 1;
     const obstacleSpeed =
-      (character.baseSpeed + speedBonus) * rushMultiplier * slowMultiplier;
+      (character.baseSpeed + speedBonus) * rushMultiplier * slowMultiplier * boosterMultiplier;
     const metersPerSec = obstacleSpeed / DISTANCE_UNITS_PER_METER;
     const forwardRate = (obstacleSpeed / 320) * 0.26;
     runtime.scrollSpeedNorm = forwardRate;
@@ -1689,8 +1972,7 @@
     runtime.obstacles.forEach(function (obstacle) {
       obstacle.depth += forwardRate * currentApproachMultiplier() * dt;
       if (obstacle.moveLane === "moving") {
-        obstacle.wobble += dt * 4;
-        obstacle.laneOffset = 0;
+        updateMovingObstacle(obstacle, dt);
       } else if (obstacle.moveLane === "hole_pop") {
         obstacle.wobble += dt * 5;
         obstacle.laneOffset = 0;
@@ -1727,7 +2009,7 @@
     });
 
     const playerHitbox = getPlayerHitbox();
-    const collectedIndices = [];
+    const collectedItems = [];
     runtime.collectibles.forEach(function (item, index) {
       const collectibleInfo = getCollectibleDrawInfo(item);
       const collectibleCircle = {
@@ -1735,29 +2017,50 @@
         y: collectibleInfo.coinCenterY,
         radius: collectibleInfo.coinRadius * 0.88
       };
+      const kind = item.kind || "coin";
       if (circleRectOverlap(collectibleCircle, playerHitbox)) {
-        collectedIndices.push(index);
+        collectedItems.push({
+          index,
+          kind
+        });
       }
     });
 
-    if (collectedIndices.length > 0) {
-      for (let i = collectedIndices.length - 1; i >= 0; i -= 1) {
-        runtime.collectibles.splice(collectedIndices[i], 1);
-      }
-      runtime.collectedTokens += collectedIndices.length;
-      runtime.score += COLLECTIBLE_BASE_SCORE * collectedIndices.length;
-      runtime.survivalGauge = Math.min(
-        SURVIVAL_MAX,
-        runtime.survivalGauge + collectedIndices.length * SURVIVAL_GAIN_PER_COIN
-      );
-      emitTelemetry("collect_ip_token", {
-        characterId: character.id,
-        stageId: runtime.speedTier + 1,
-        distance: Math.round(runtime.distanceMeters),
-        collected: runtime.collectedTokens,
-        score: Math.round(runtime.score),
-        survivalGauge: Math.round(runtime.survivalGauge)
+    if (collectedItems.length > 0) {
+      const sortedItems = collectedItems.slice().sort(function (a, b) {
+        return b.index - a.index;
       });
+      sortedItems.forEach(function (item) {
+        runtime.collectibles.splice(item.index, 1);
+      });
+
+      const coinCount = collectedItems.filter(function (item) {
+        return item.kind === "coin";
+      }).length;
+      const boosterCount = collectedItems.filter(function (item) {
+        return item.kind === "booster";
+      }).length;
+
+      if (coinCount > 0) {
+        runtime.collectedTokens += coinCount;
+        runtime.score += COLLECTIBLE_BASE_SCORE * coinCount;
+        runtime.survivalGauge = Math.min(
+          SURVIVAL_MAX,
+          runtime.survivalGauge + coinCount * SURVIVAL_GAIN_PER_COIN
+        );
+        emitTelemetry("collect_ip_token", {
+          characterId: character.id,
+          stageId: runtime.speedTier + 1,
+          distance: Math.round(runtime.distanceMeters),
+          collected: runtime.collectedTokens,
+          score: Math.round(runtime.score),
+          survivalGauge: Math.round(runtime.survivalGauge)
+        });
+      }
+
+      for (let i = 0; i < boosterCount; i += 1) {
+        activateBooster(character);
+      }
     }
 
     runtime.score += dt * (10 + Math.min(runtime.speedTier, 14) * 1.8);
@@ -1767,32 +2070,51 @@
     });
 
     if (poisonHit) {
-      emitTelemetry("hit_poison", {
-        characterId: character.id,
-        stageId: runtime.speedTier + 1,
-        distance: Math.round(runtime.distanceMeters),
-        score: Math.round(runtime.score)
-      });
-      endRun("poison_hit");
-      return;
-    }
-
-    const canTakeHit = runtime.shieldTimer <= 0 && runtime.blinkTimer <= 0;
-    if (canTakeHit) {
-      const hitObstacle = runtime.obstacles.find(function (obstacle) {
-        return rectsOverlap(getObstacleHitbox(obstacle), playerHitbox);
-      });
-      if (hitObstacle) {
-        emitTelemetry("hit_obstacle", {
+      if (isBoosterActive()) {
+        poisonHit.passed = true;
+        runtime.score += 70;
+        emitTelemetry("booster_block_poison", {
           characterId: character.id,
           stageId: runtime.speedTier + 1,
           distance: Math.round(runtime.distanceMeters),
-          obstacleType: hitObstacle.type,
           score: Math.round(runtime.score)
         });
-        endRun("collision");
+      } else {
+        emitTelemetry("hit_poison", {
+          characterId: character.id,
+          stageId: runtime.speedTier + 1,
+          distance: Math.round(runtime.distanceMeters),
+          score: Math.round(runtime.score)
+        });
+        endRun("poison_hit");
         return;
       }
+    }
+
+    const hitObstacle = runtime.obstacles.find(function (obstacle) {
+      return rectsOverlap(getObstacleHitbox(obstacle), playerHitbox);
+    });
+
+    if (hitObstacle && isBoosterActive()) {
+      hitObstacle.passed = true;
+      runtime.score += 140;
+      emitTelemetry("booster_break_obstacle", {
+        characterId: character.id,
+        stageId: runtime.speedTier + 1,
+        distance: Math.round(runtime.distanceMeters),
+        obstacleType: hitObstacle.type,
+        score: Math.round(runtime.score)
+      });
+    } else if (hitObstacle && runtime.shieldTimer <= 0 && runtime.blinkTimer <= 0) {
+      emitTelemetry("hit_obstacle", {
+        characterId: character.id,
+        stageId: runtime.speedTier + 1,
+        distance: Math.round(runtime.distanceMeters),
+        obstacleType: hitObstacle.type,
+        score: Math.round(runtime.score)
+      });
+      endRun("collision");
+      return;
     }
 
     runtime.collectibles.forEach(function (item) {
@@ -1942,9 +2264,15 @@
     ctx.beginPath();
     ctx.ellipse(playerCenterX + runPose.x * 0.45, shadowY, shadowW, shadowH, 0, 0, Math.PI * 2);
     ctx.fill();
+    drawBoosterAura(player, runPose);
     drawRunnerStepEffect(player, runPose);
 
-    const color = runtime.shieldTimer > 0 ? "#ffd364" : IP_THEME.runner.color;
+    const color =
+      isBoosterActive()
+        ? "#5eeeff"
+        : runtime.shieldTimer > 0
+          ? "#ffd364"
+          : IP_THEME.runner.color;
     const drawWidth = player.width * runPose.scaleX;
     const drawHeight = player.height * runPose.scaleY;
     const drawX = player.x + runPose.x + (player.width - drawWidth) * 0.5;
@@ -1982,6 +2310,103 @@
     }
   }
 
+  function renderMoleObstacle(obstacle, info) {
+    const projected = info.projected;
+    const drawWidth = info.drawWidth;
+    const drawHeight = info.drawHeight;
+    const drawX = info.drawX;
+    const drawY = info.drawY;
+    const holeY = drawY + drawHeight * 0.92;
+    const visibleRatio = moleVisibleRatio(obstacle);
+    const moleY = holeY - drawHeight * visibleRatio;
+    const holeRadiusX = drawWidth * 0.52;
+    const holeRadiusY = Math.max(4, drawHeight * 0.105);
+    const snowLipY = holeY - holeRadiusY * 0.08;
+
+    ctx.fillStyle = "rgba(18, 30, 46, 0.68)";
+    ctx.beginPath();
+    ctx.ellipse(projected.x, holeY, holeRadiusX, holeRadiusY, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(156, 220, 255, 0.38)";
+    ctx.lineWidth = Math.max(1, projected.scale * 1.5);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(drawX - drawWidth * 0.3, drawY - drawHeight * 0.08, drawWidth * 1.6, holeY - drawY + drawHeight * 0.08);
+    ctx.clip();
+    const rendered = drawCroppedSprite(
+      "moleObstacle",
+      drawX,
+      moleY,
+      drawWidth,
+      drawHeight
+    );
+    if (!rendered) {
+      drawRoundedRect(
+        drawX + drawWidth * 0.12,
+        moleY,
+        drawWidth * 0.76,
+        drawHeight,
+        Math.max(5, drawWidth * 0.18),
+        IP_THEME.moleObstacle.color
+      );
+    }
+    ctx.restore();
+
+    ctx.fillStyle = "rgba(223, 245, 255, 0.88)";
+    ctx.beginPath();
+    ctx.ellipse(projected.x, snowLipY, holeRadiusX * 1.08, holeRadiusY * 0.72, 0, 0, Math.PI);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(126, 188, 218, 0.34)";
+    ctx.lineWidth = Math.max(1, projected.scale * 1.2);
+    ctx.beginPath();
+    ctx.ellipse(projected.x, snowLipY, holeRadiusX * 1.08, holeRadiusY * 0.72, 0, 0, Math.PI);
+    ctx.stroke();
+  }
+
+  function renderMovingEnemyObstacle(obstacle, info) {
+    const drawWidth = info.drawWidth;
+    const drawHeight = info.drawHeight;
+    const drawX = info.drawX;
+    const drawY = info.drawY;
+    const centerX = drawX + drawWidth * 0.5;
+    const centerY = drawY + drawHeight * 0.55;
+    const bob = Math.sin(obstacle.wobble * 1.5) * drawHeight * 0.025;
+    const visualLane = Number.isFinite(obstacle.visualLane) ? obstacle.visualLane : obstacle.lane;
+    const laneDrift = obstacle.lane - visualLane;
+    const tilt = Math.max(-0.12, Math.min(0.12, laneDrift * -0.08));
+
+    ctx.save();
+    ctx.translate(centerX, centerY + bob);
+    ctx.rotate(tilt);
+    const rendered = drawCroppedSprite(
+      "movingEnemy",
+      -drawWidth * 0.5,
+      -drawHeight * 0.55,
+      drawWidth,
+      drawHeight
+    );
+    if (!rendered) {
+      drawRoundedRect(
+        -drawWidth * 0.44,
+        -drawHeight * 0.5,
+        drawWidth * 0.88,
+        drawHeight,
+        Math.max(5, drawWidth * 0.2),
+        IP_THEME.movingEnemy.color
+      );
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.font = "800 " + Math.max(9, drawWidth * 0.18).toFixed(1) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("MOV", 0, 0);
+    }
+    ctx.restore();
+  }
+
   function renderObstacles() {
     runtime.obstacles.forEach(function (obstacle) {
       const info = getObstacleDrawInfo(obstacle);
@@ -2015,15 +2440,38 @@
         ctx.strokeStyle = "rgba(161, 221, 255, 0.38)";
         ctx.lineWidth = Math.max(1, projected.scale * 1.5);
         ctx.stroke();
-        drawIpSprite(
+        const enemyDrawX = drawX + drawWidth * 0.02;
+        const enemyDrawY = drawY - drawHeight * 0.08;
+        const enemyDrawWidth = drawWidth * 0.96;
+        const enemyDrawHeight = drawHeight * 1.08;
+        const renderedEnemy = drawCroppedSprite(
           "holeEnemy",
-          drawX + drawWidth * 0.08,
-          drawY - drawHeight * 0.04,
-          drawWidth * 0.84,
-          drawHeight,
-          IP_THEME.holeEnemy.color,
-          "ENM"
+          enemyDrawX,
+          enemyDrawY,
+          enemyDrawWidth,
+          enemyDrawHeight
         );
+        if (!renderedEnemy) {
+          drawIpSprite(
+            "holeEnemy",
+            enemyDrawX,
+            enemyDrawY,
+            enemyDrawWidth,
+            enemyDrawHeight,
+            IP_THEME.holeEnemy.color,
+            "ENM"
+          );
+        }
+        return;
+      }
+
+      if (obstacle.moveLane === "mole_pop") {
+        renderMoleObstacle(obstacle, info);
+        return;
+      }
+
+      if (obstacle.moveLane === "moving") {
+        renderMovingEnemyObstacle(obstacle, info);
         return;
       }
 
@@ -2107,6 +2555,70 @@
     });
   }
 
+  function drawBoosterCollectible(item, info) {
+    const x = info.coinCenterX;
+    const y = info.coinCenterY;
+    const r = info.coinRadius * 1.08;
+    const pulse = 0.5 + Math.sin(item.wobble * 2.2) * 0.5;
+    const spin = Math.sin(item.wobble * 1.5) * 0.12;
+
+    const glow = ctx.createRadialGradient(x, y, 2, x, y, r * 2.2);
+    glow.addColorStop(0, "rgba(113, 247, 255, 0.9)");
+    glow.addColorStop(0.44, "rgba(56, 203, 255, 0.36)");
+    glow.addColorStop(1, "rgba(56, 203, 255, 0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y, r * (1.72 + pulse * 0.16), 0, Math.PI * 2);
+    ctx.fill();
+
+    if (spritePool.booster && spritePool.booster.complete && spritePool.booster.naturalWidth > 0) {
+      const imageWidth = info.drawWidth * (1.22 + pulse * 0.04);
+      const imageHeight = info.drawHeight * (1.18 + pulse * 0.04);
+      const bob = Math.sin(item.wobble * 1.8) * r * 0.08;
+      drawCroppedSprite(
+        "booster",
+        x - imageWidth * 0.5,
+        y - imageHeight * 0.56 + bob,
+        imageWidth,
+        imageHeight
+      );
+      return;
+    }
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(spin);
+    ctx.fillStyle = "#42ddff";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.86)";
+    ctx.lineWidth = Math.max(1.4, r * 0.11);
+    ctx.beginPath();
+    ctx.moveTo(0, -r * 1.04);
+    ctx.lineTo(r * 0.95, 0);
+    ctx.lineTo(0, r * 1.04);
+    ctx.lineTo(-r * 0.95, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#fff38a";
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.1, -r * 0.72);
+    ctx.lineTo(r * 0.32, -r * 0.12);
+    ctx.lineTo(r * 0.04, -r * 0.08);
+    ctx.lineTo(r * 0.2, r * 0.72);
+    ctx.lineTo(-r * 0.38, r * 0.02);
+    ctx.lineTo(-r * 0.08, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(9, 48, 78, 0.82)";
+    ctx.font = "800 " + Math.max(8, r * 0.44).toFixed(1) + "px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("B", 0, r * 0.06);
+    ctx.restore();
+  }
+
   function renderCollectibles() {
     runtime.collectibles.forEach(function (item) {
       const info = getCollectibleDrawInfo(item);
@@ -2120,6 +2632,11 @@
       const coinRadius = info.coinRadius;
       const spin = Math.sin(item.wobble * 1.25);
       const coinImage = spritePool.collectible;
+
+      if (item.kind === "booster") {
+        drawBoosterCollectible(item, info);
+        return;
+      }
 
       if (coinImage && coinImage.complete && coinImage.naturalWidth > 0) {
         drawIpSprite(
@@ -2345,16 +2862,23 @@
     const survivalRatio = Math.max(0, Math.min(1, runtime.survivalGauge / SURVIVAL_MAX));
     if (survivalFill) {
       survivalFill.style.width = (survivalRatio * 100).toFixed(1) + "%";
-      const hue = 12 + survivalRatio * 102;
-      survivalFill.style.background =
-        "linear-gradient(90deg, hsl(" +
-        hue +
-        " 88% 56%), hsl(" +
-        (hue + 18) +
-        " 90% 60%))";
+      if (isBoosterActive()) {
+        survivalFill.style.background =
+          "linear-gradient(90deg, #42ddff, #fff38a)";
+      } else {
+        const hue = 12 + survivalRatio * 102;
+        survivalFill.style.background =
+          "linear-gradient(90deg, hsl(" +
+          hue +
+          " 88% 56%), hsl(" +
+          (hue + 18) +
+          " 90% 60%))";
+      }
     }
     if (survivalValue) {
-      survivalValue.textContent = Math.round(survivalRatio * 100) + "%";
+      survivalValue.textContent = isBoosterActive()
+        ? "BOOST " + Math.ceil(runtime.boosterTimer) + "s"
+        : Math.round(survivalRatio * 100) + "%";
     }
   }
 
@@ -2586,6 +3110,9 @@
       primeRunnerFrameSprites();
       primeSprite(IP_THEME.holeEnemy, "holeEnemy");
       primeSprite(IP_THEME.collectible, "collectible");
+      primeSprite(IP_THEME.booster, "booster");
+      primeSprite(IP_THEME.moleObstacle, "moleObstacle");
+      primeSprite(IP_THEME.movingEnemy, "movingEnemy");
       primeSprite(IP_THEME.projectile, "projectile");
       bindInput();
       switchScene(sceneStart);
