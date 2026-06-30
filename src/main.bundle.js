@@ -1,7 +1,19 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "v1.1.2";
+  const APP_VERSION = "v1.1.3";
+  const TITLE_BGM_SRC = "./assets/runner_game_title.mp3";
+  const TITLE_BGM_VOLUME = 0.62;
+  const START_CLICK_SFX_SRC = "./assets/ui_click_store.wav";
+  const START_CLICK_SFX_VOLUME = 0.9;
+  const COUNTDOWN_SFX_SRC = "./assets/count_number.wav";
+  const COUNTDOWN_SFX_VOLUME = 0.4;
+  const GO_COUNTDOWN_SFX_SRC = "./assets/count_go.wav";
+  const GO_COUNTDOWN_SFX_VOLUME = 0.4;
+  const INGAME_BGM_SRC = "./assets/run_ingame.mp3?v=20260630_1158";
+  const INGAME_BGM_VOLUME = 0.58;
+  const INGAME_BGM_START_DELAY_MS = 140;
+  const SIDE_PROP_SLOT_COUNT = 3;
   const MISSION_SCORE_TARGET = 1200;
   const MISSION_DISTANCE_TARGET = 900;
   const MISSION_COLLECTIBLE_TARGET = 7;
@@ -28,6 +40,8 @@
   const MOLE_START_SPAWN_RATIO = 0.25;
   const MOLE_RATIO_DROP_PER_TIER = 0.02;
   const MOLE_MIN_SPAWN_RATIO = 0.08;
+  const MOLE_VISIBLE_MIN_RATIO = 0.22;
+  const MOLE_VISIBLE_MAX_RATIO = 0.67;
   const SURVIVAL_MAX = 100;
   const SURVIVAL_DECAY_PER_SEC = 8.6;
   const SURVIVAL_DECAY_PER_LEVEL = 0.7;
@@ -130,6 +144,26 @@
       name: "회사IP_이동적",
       color: "#27c8bd",
       imageSrc: "./assets/moving_enemy.png"
+    },
+    ingameBackground: {
+      name: "회사IP_인게임배경",
+      color: "#bfe8ff",
+      imageSrc: "./assets/ingame_background.png"
+    },
+    sideTree: {
+      name: "좌우_나무장식",
+      color: "#7cbf8b",
+      imageSrc: "./assets/side_tree.png"
+    },
+    sideSign: {
+      name: "좌우_표지판장식",
+      color: "#d6b37a",
+      imageSrc: "./assets/side_sign.png"
+    },
+    sideIgloo: {
+      name: "좌우_이글루장식",
+      color: "#9ac8f8",
+      imageSrc: "./assets/side_igloo.png"
     },
     projectile: {
       name: "회사IP_응가투사체",
@@ -520,6 +554,14 @@
   const ctx = canvas.getContext("2d");
   const spritePool = {};
   const spriteMeta = {};
+  let titleBgm = null;
+  let startClickSfx = null;
+  let countdownSfx = null;
+  let goCountdownSfx = null;
+  let ingameBgm = null;
+  let titleBgmUnlockBound = false;
+  let titleBgmUnmuteTimer = null;
+  let ingameBgmStartTimer = null;
 
   if (versionLabel) {
     versionLabel.textContent = APP_VERSION;
@@ -570,6 +612,7 @@
     slowTimer: 0,
     blinkTimer: 0,
     scrollSpeedNorm: 0.26,
+    sideObjectFlow: 0,
     player: {
       x: 78,
       y: 0,
@@ -615,6 +658,9 @@
       key === "holeEnemy" ||
       key === "moleObstacle" ||
       key === "movingEnemy" ||
+      key === "sideTree" ||
+      key === "sideSign" ||
+      key === "sideIgloo" ||
       key.indexOf("runnerFrame") === 0
     ) {
       image.addEventListener("load", function () {
@@ -768,6 +814,35 @@
     const sy = crop ? crop.sy : 0;
     const sw = crop ? crop.sw : image.naturalWidth;
     const sh = crop ? crop.sh : image.naturalHeight;
+    ctx.drawImage(image, sx, sy, sw, sh, x, y, width, height);
+    return true;
+  }
+
+  function isSpriteReady(key) {
+    const image = spritePool[key];
+    return !!(image && image.complete && image.naturalWidth > 0);
+  }
+
+  function drawCoverSprite(key, x, y, width, height) {
+    const image = spritePool[key];
+    if (!isSpriteReady(key)) {
+      return false;
+    }
+    const imageRatio = image.naturalWidth / image.naturalHeight;
+    const targetRatio = width / height;
+    let sx = 0;
+    let sy = 0;
+    let sw = image.naturalWidth;
+    let sh = image.naturalHeight;
+
+    if (imageRatio > targetRatio) {
+      sw = image.naturalHeight * targetRatio;
+      sx = (image.naturalWidth - sw) * 0.5;
+    } else if (imageRatio < targetRatio) {
+      sh = image.naturalWidth / targetRatio;
+      sy = (image.naturalHeight - sh) * 0.5;
+    }
+
     ctx.drawImage(image, sx, sy, sw, sh, x, y, width, height);
     return true;
   }
@@ -942,11 +1017,277 @@
     ctx.restore();
   }
 
+  function ensureTitleBgm() {
+    if (titleBgm) {
+      return titleBgm;
+    }
+    const audio = new Audio(TITLE_BGM_SRC);
+    audio.loop = true;
+    audio.autoplay = true;
+    audio.preload = "auto";
+    audio.volume = TITLE_BGM_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    titleBgm = audio;
+    return titleBgm;
+  }
+
+  function ensureStartClickSfx() {
+    if (startClickSfx) {
+      return startClickSfx;
+    }
+    const audio = new Audio(START_CLICK_SFX_SRC);
+    audio.preload = "auto";
+    audio.volume = START_CLICK_SFX_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    startClickSfx = audio;
+    return startClickSfx;
+  }
+
+  function playStartClickSfx() {
+    const audio = ensureStartClickSfx();
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch (_err) {
+      // Ignore seeks before metadata is loaded.
+    }
+    audio.volume = START_CLICK_SFX_VOLUME;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Ignore audio playback rejections.
+      });
+    }
+  }
+
+  function ensureCountdownSfx() {
+    if (countdownSfx) {
+      return countdownSfx;
+    }
+    const audio = new Audio(COUNTDOWN_SFX_SRC);
+    audio.preload = "auto";
+    audio.volume = COUNTDOWN_SFX_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    countdownSfx = audio;
+    return countdownSfx;
+  }
+
+  function playCountdownSfx() {
+    const audio = ensureCountdownSfx();
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch (_err) {
+      // Ignore seeks before metadata is loaded.
+    }
+    audio.volume = COUNTDOWN_SFX_VOLUME;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Ignore audio playback rejections.
+      });
+    }
+  }
+
+  function ensureGoCountdownSfx() {
+    if (goCountdownSfx) {
+      return goCountdownSfx;
+    }
+    const audio = new Audio(GO_COUNTDOWN_SFX_SRC);
+    audio.preload = "auto";
+    audio.volume = GO_COUNTDOWN_SFX_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    goCountdownSfx = audio;
+    return goCountdownSfx;
+  }
+
+  function ensureIngameBgm() {
+    if (ingameBgm) {
+      return ingameBgm;
+    }
+    const audio = new Audio(INGAME_BGM_SRC);
+    audio.loop = true;
+    audio.preload = "auto";
+    audio.volume = INGAME_BGM_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    ingameBgm = audio;
+    return ingameBgm;
+  }
+
+  function playGoCountdownSfx() {
+    const audio = ensureGoCountdownSfx();
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch (_err) {
+      // Ignore seeks before metadata is loaded.
+    }
+    audio.volume = GO_COUNTDOWN_SFX_VOLUME;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Ignore audio playback rejections.
+      });
+    }
+  }
+
+  function clearIngameBgmStartTimer() {
+    if (ingameBgmStartTimer) {
+      window.clearTimeout(ingameBgmStartTimer);
+      ingameBgmStartTimer = null;
+    }
+  }
+
+  function playIngameBgm(resetPosition) {
+    clearIngameBgmStartTimer();
+    const audio = ensureIngameBgm();
+    if (resetPosition) {
+      audio.pause();
+      try {
+        audio.currentTime = 0;
+      } catch (_err) {
+        // Ignore seeks before metadata is loaded.
+      }
+    }
+    audio.volume = INGAME_BGM_VOLUME;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Ignore audio playback rejections.
+      });
+    }
+  }
+
+  function stopIngameBgm(resetPosition) {
+    clearIngameBgmStartTimer();
+    if (!ingameBgm) {
+      return;
+    }
+    ingameBgm.pause();
+    if (resetPosition) {
+      try {
+        ingameBgm.currentTime = 0;
+      } catch (_err) {
+        // Ignore seeks before metadata is loaded.
+      }
+    }
+  }
+
+  function queueIngameBgmAfterGo() {
+    clearIngameBgmStartTimer();
+    ingameBgmStartTimer = window.setTimeout(function () {
+      if (!runtime.running || runtime.countdownActive) {
+        return;
+      }
+      playIngameBgm(false);
+    }, INGAME_BGM_START_DELAY_MS);
+  }
+
+  function clearTitleBgmUnmuteTimer() {
+    if (titleBgmUnmuteTimer) {
+      window.clearTimeout(titleBgmUnmuteTimer);
+      titleBgmUnmuteTimer = null;
+    }
+  }
+
+  function queueTitleBgmAutoUnmute(retryCount) {
+    clearTitleBgmUnmuteTimer();
+    titleBgmUnmuteTimer = window.setTimeout(function () {
+      const audio = ensureTitleBgm();
+      const isStartSceneActive =
+        sceneStart && sceneStart.classList.contains("scene-active");
+      if (!isStartSceneActive) {
+        return;
+      }
+      audio.muted = false;
+      audio.volume = TITLE_BGM_VOLUME;
+      const audibleAttempt = audio.play();
+      if (audibleAttempt && typeof audibleAttempt.catch === "function") {
+        audibleAttempt.catch(function () {
+          audio.muted = true;
+          if (retryCount < 8) {
+            queueTitleBgmAutoUnmute(retryCount + 1);
+          } else {
+            bindTitleBgmUnlock();
+          }
+        });
+      }
+    }, 280 + retryCount * 140);
+  }
+
+  function bindTitleBgmUnlock() {
+    if (titleBgmUnlockBound) {
+      return;
+    }
+    titleBgmUnlockBound = true;
+    const unlock = function () {
+      const audio = ensureTitleBgm();
+      audio.muted = false;
+      const playAttempt = audio.play();
+      if (playAttempt && typeof playAttempt.catch === "function") {
+        playAttempt.catch(function () {
+          // Ignore; next interaction can retry.
+        });
+      }
+      clearTitleBgmUnmuteTimer();
+      window.removeEventListener("pointerdown", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+      titleBgmUnlockBound = false;
+    };
+    window.addEventListener("pointerdown", unlock, true);
+    window.addEventListener("keydown", unlock, true);
+  }
+
+  function playTitleBgm(resetPosition) {
+    const audio = ensureTitleBgm();
+    if (resetPosition) {
+      try {
+        audio.currentTime = 0;
+      } catch (_err) {
+        // Ignore seeks before metadata is loaded.
+      }
+    }
+    audio.volume = TITLE_BGM_VOLUME;
+    audio.muted = true;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Autoplay blocked fully, wait for unlock interaction.
+        bindTitleBgmUnlock();
+      });
+    }
+    queueTitleBgmAutoUnmute(0);
+  }
+
+  function stopTitleBgm(resetPosition) {
+    if (!titleBgm) {
+      return;
+    }
+    clearTitleBgmUnmuteTimer();
+    titleBgm.pause();
+    if (resetPosition) {
+      try {
+        titleBgm.currentTime = 0;
+      } catch (_err) {
+        // Ignore seeks before metadata is loaded.
+      }
+    }
+  }
+
   function switchScene(target) {
     sceneStart.classList.remove("scene-active");
     sceneGame.classList.remove("scene-active");
     sceneResult.classList.remove("scene-active");
     target.classList.add("scene-active");
+    if (target === sceneStart) {
+      stopIngameBgm(true);
+      playTitleBgm(true);
+    } else if (target === sceneGame) {
+      stopTitleBgm(false);
+    } else {
+      stopTitleBgm(false);
+      stopIngameBgm(true);
+    }
   }
 
   function cancelFrameLoop() {
@@ -1027,7 +1368,20 @@
   }
 
   function roadGeometry() {
+    if (isSpriteReady("ingameBackground")) {
+      const centerX = canvas.width * 0.5;
+      const topHalfWidth = canvas.width * 0.059;
+      return {
+        topY: Math.round(canvas.height * 0.22),
+        topLeft: centerX - topHalfWidth,
+        topRight: centerX + topHalfWidth,
+        bottomLeft: 0,
+        bottomRight: canvas.width,
+        bottomY: nearPlaneY() + 22
+      };
+    }
     return {
+      topY: HORIZON_Y,
       topLeft: canvas.width * 0.5 - 34,
       topRight: canvas.width * 0.5 + 34,
       bottomLeft: 0,
@@ -1036,19 +1390,26 @@
     };
   }
 
+  function roadHorizonY() {
+    const geometry = roadGeometry();
+    return Number.isFinite(geometry.topY) ? geometry.topY : HORIZON_Y;
+  }
+
   function projectDepthY(depth) {
+    const horizonY = roadHorizonY();
     const clampedDepth = Math.max(0, Math.min(1, depth));
     if (depth < 0) {
-      return HORIZON_Y + depth * 140;
+      // Keep freshly spawned objects on the road horizon instead of the sky.
+      return horizonY;
     }
-    return HORIZON_Y + (nearPlaneY() - HORIZON_Y) * Math.pow(clampedDepth, 1.36);
+    return horizonY + (nearPlaneY() - horizonY) * Math.pow(clampedDepth, 1.36);
   }
 
   function roadEaseAtY(y) {
     const geometry = roadGeometry();
     return Math.max(
       0,
-      Math.min(1, (y - HORIZON_Y) / (geometry.bottomY - HORIZON_Y))
+      Math.min(1, (y - geometry.topY) / (geometry.bottomY - geometry.topY))
     );
   }
 
@@ -1263,6 +1624,7 @@
     runtime.slowTimer = 0;
     runtime.blinkTimer = 0;
     runtime.scrollSpeedNorm = 0.26;
+    runtime.sideObjectFlow = 0;
     updatePauseToggleButton();
 
     const player = runtime.player;
@@ -1407,6 +1769,13 @@
       speedTier * APPROACH_MULTIPLIER_PER_LEVEL
     );
     return OBSTACLE_APPROACH_MULTIPLIER * (1 + levelBonus);
+  }
+
+  function currentCollectibleApproachMultiplier() {
+    return (
+      (1.12 + Math.min(0.22, runtime.speedTier * 0.012)) *
+      (1 + Math.min(0.26, runtime.speedTier * 0.035))
+    );
   }
 
   function isEnemyObstacle(base) {
@@ -1701,7 +2070,10 @@
   }
 
   function moleVisibleRatio(obstacle) {
-    return 0.24 + moleRiseRatio(obstacle) * 0.7;
+    return (
+      MOLE_VISIBLE_MIN_RATIO +
+      moleRiseRatio(obstacle) * (MOLE_VISIBLE_MAX_RATIO - MOLE_VISIBLE_MIN_RATIO)
+    );
   }
 
   function obstacleLaneSpan(obstacle) {
@@ -1930,9 +2302,11 @@
       (character.baseSpeed + speedBonus) * rushMultiplier * slowMultiplier * boosterMultiplier;
     const metersPerSec = obstacleSpeed / DISTANCE_UNITS_PER_METER;
     const forwardRate = (obstacleSpeed / 320) * 0.26;
+    const collectibleApproachMultiplier = currentCollectibleApproachMultiplier();
     runtime.scrollSpeedNorm = forwardRate;
     runtime.speedKmh = metersPerSec * 3.6;
     runtime.distanceMeters += metersPerSec * dt;
+    runtime.sideObjectFlow += forwardRate * collectibleApproachMultiplier * dt;
 
     const nextSpeedTier = speedTierFromElapsed(runtime.totalElapsed);
     if (nextSpeedTier > runtime.speedTier) {
@@ -1986,11 +2360,7 @@
     });
 
     runtime.collectibles.forEach(function (item) {
-      item.depth +=
-        forwardRate *
-        (1.12 + Math.min(0.22, runtime.speedTier * 0.012)) *
-        (1 + Math.min(0.26, runtime.speedTier * 0.035)) *
-        dt;
+      item.depth += forwardRate * collectibleApproachMultiplier * dt;
       item.wobble += dt * 5;
       item.laneOffset = 0;
     });
@@ -2150,6 +2520,10 @@
   }
 
   function renderBackground() {
+    if (drawCoverSprite("ingameBackground", 0, 0, canvas.width, canvas.height)) {
+      return;
+    }
+
     const palette = currentWorldPalette();
     const nearY = nearPlaneY();
     const feel = speedFeel();
@@ -2182,6 +2556,10 @@
   }
 
   function renderGround() {
+    if (isSpriteReady("ingameBackground")) {
+      return;
+    }
+
     const palette = currentWorldPalette();
     const nearY = nearPlaneY();
 
@@ -2702,20 +3080,102 @@
     return value - Math.floor(value);
   }
 
+  function sidePropSpriteKey(type) {
+    if (type === 0) {
+      return "sideTree";
+    }
+    if (type === 1) {
+      return "sideSign";
+    }
+    return "sideIgloo";
+  }
+
+  function sidePropBaseWidth(spriteKey) {
+    return sidePropSize(spriteKey).width;
+  }
+
+  function sidePropSize(spriteKey) {
+    const sizeScale = Math.max(0.9, Math.min(1.1, canvas.width / 390));
+    if (spriteKey === "sideSign") {
+      return {
+        width: 58 * sizeScale,
+        height: 43 * sizeScale
+      };
+    }
+    if (spriteKey === "sideIgloo") {
+      return {
+        width: 54 * sizeScale,
+        height: 40 * sizeScale
+      };
+    }
+    return {
+      width: 54 * sizeScale,
+      height: 64 * sizeScale
+    };
+  }
+
+  function sidePropLaneX(side, spriteKey, y) {
+    const width = sidePropBaseWidth(spriteKey);
+    const edgeGap = Math.max(8, canvas.width * 0.026);
+    const ease = roadEaseAtY(y);
+    const roadEdgeX = roadBoundaryX(side < 0 ? 0 : LANE_COUNT, ease);
+    return roadEdgeX + side * (width * 0.5 + edgeGap);
+  }
+
   function drawSideProp(prop) {
     const depth = prop.depth;
-    const scale = 0.36 + Math.pow(depth, 1.12) * 1.42;
-    const width = (18 + prop.widthSeed * 18) * scale;
-    const height = (32 + prop.heightSeed * 42) * scale;
     const x = prop.x;
     const y = prop.y;
-    const alpha = Math.min(0.78, 0.2 + depth * 0.58);
+    const alpha = 0.82;
+    const spriteKey = sidePropSpriteKey(prop.type);
+    const hasSprite = isSpriteReady(spriteKey);
+    const size = sidePropSize(spriteKey);
+    const width = size.width;
+    const height = size.height;
 
     ctx.save();
     ctx.globalAlpha = alpha;
+    if (hasSprite) {
+      const drawWidth = width;
+      const drawHeight = height;
+      if (x - drawWidth * 0.5 < 0 || x + drawWidth * 0.5 > canvas.width) {
+        ctx.restore();
+        return;
+      }
+      ctx.fillStyle = "rgba(8, 18, 30, 0.2)";
+      ctx.beginPath();
+      ctx.ellipse(
+        x,
+        y + drawHeight * 0.04,
+        drawWidth * 0.45,
+        Math.max(3, drawHeight * 0.09),
+        0,
+        0,
+        Math.PI * 2
+      );
+      ctx.fill();
+      drawCroppedSprite(
+        spriteKey,
+        x - drawWidth * 0.5,
+        y - drawHeight,
+        drawWidth,
+        drawHeight
+      );
+      ctx.restore();
+      return;
+    }
+
     ctx.fillStyle = "rgba(9, 22, 36, " + (0.14 + depth * 0.12) + ")";
     ctx.beginPath();
-    ctx.ellipse(x, y + height * 0.06, width * 0.54, Math.max(3, height * 0.08), 0, 0, Math.PI * 2);
+    ctx.ellipse(
+      x,
+      y + height * 0.06,
+      width * 0.54,
+      Math.max(3, height * 0.08),
+      0,
+      0,
+      Math.PI * 2
+    );
     ctx.fill();
 
     if (prop.type === 0) {
@@ -2785,36 +3245,29 @@
   }
 
   function renderSpeedFx() {
-    const nearY = nearPlaneY();
-    const roadTopLeft = laneHorizonX(0) - 86;
-    const roadTopRight = laneHorizonX(LANE_COUNT - 1) + 86;
-    const roadBottomLeft = laneCenterX(0) - 130;
-    const roadBottomRight = laneCenterX(LANE_COUNT - 1) + 130;
-    const flowSpeed = 0.38 + runtime.scrollSpeedNorm * 1.05 + Math.min(runtime.speedTier, 12) * 0.055;
-    const flow = (runtime.totalElapsed * flowSpeed) % 1;
+    const usingImageBackground = isSpriteReady("ingameBackground");
+    const startY = roadHorizonY() + canvas.height * 0.11;
+    const endY = canvas.height + 78;
+    const travelRange = endY - startY;
+    const flow = runtime.sideObjectFlow;
     const props = [];
 
-    for (let i = 0; i < 13; i += 1) {
-      const baseDepth = ((i / 13) + flow) % 1;
+    for (let i = 0; i < SIDE_PROP_SLOT_COUNT; i += 1) {
+      const rawDepth = flow + i / SIDE_PROP_SLOT_COUNT;
+      const cycleIndex = Math.floor(rawDepth);
+      const seed = i * 17 + cycleIndex * 97;
+      const baseDepth = rawDepth - cycleIndex;
       const depth = Math.max(0.02, baseDepth);
-      const ease = Math.pow(depth, 1.18);
-      const y = HORIZON_Y + ease * (nearY - HORIZON_Y + 84);
-
-      [-1, 1].forEach(function (side, sideIndex) {
-        const seed = i * 17 + sideIndex * 31 + Math.floor(runtime.totalElapsed * flowSpeed);
-        const sideJitter = (propHash(seed + 3) - 0.5) * (18 + depth * 24);
-        const edgeFar = side < 0 ? roadTopLeft : roadTopRight;
-        const edgeNear = side < 0 ? roadBottomLeft : roadBottomRight;
-        const roadEdgeX = edgeFar + (edgeNear - edgeFar) * ease;
-        const sideOffset = side * (22 + depth * 46);
-        props.push({
-          depth,
-          x: roadEdgeX + sideOffset + sideJitter,
-          y,
-          type: Math.floor(propHash(seed + 9) * 3),
-          widthSeed: propHash(seed + 15),
-          heightSeed: propHash(seed + 21)
-        });
+      const y = startY + depth * travelRange;
+      const side = propHash(seed + 27) < 0.5 ? -1 : 1;
+      const type = i % 3;
+      const spriteKey = sidePropSpriteKey(type);
+      props.push({
+        depth,
+        x: sidePropLaneX(side, spriteKey, y),
+        y,
+        side,
+        type
       });
     }
 
@@ -2832,7 +3285,7 @@
       canvas.height * 0.95
     );
     vignette.addColorStop(0, "rgba(0,0,0,0)");
-    vignette.addColorStop(1, "rgba(6, 17, 26, 0.08)");
+    vignette.addColorStop(1, usingImageBackground ? "rgba(6, 17, 26, 0.045)" : "rgba(6, 17, 26, 0.08)");
     ctx.fillStyle = vignette;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
@@ -2906,9 +3359,14 @@
     ].forEach(function (step) {
       const timerId = window.setTimeout(function () {
         showOverlay(step.text, step.duration, "countdown");
+        if (step.text === "3" || step.text === "2" || step.text === "1") {
+          playCountdownSfx();
+        }
         if (step.text === "GO!") {
+          playGoCountdownSfx();
           runtime.countdownActive = false;
           runtime.lastFrameTime = performance.now();
+          queueIngameBgmAfterGo();
         }
       }, step.delay);
       countdownTimers.push(timerId);
@@ -2949,6 +3407,7 @@
   function startRun() {
     cancelFrameLoop();
     cancelCountdown(true);
+    stopIngameBgm(true);
     resetRunState();
     switchScene(sceneGame);
     const character = selectedCharacter();
@@ -2995,7 +3454,10 @@
 
   function bindInput() {
     if (startButton) {
-      startButton.addEventListener("click", startRun);
+      startButton.addEventListener("click", function () {
+        playStartClickSfx();
+        startRun();
+      });
     }
     if (sceneStart) {
       sceneStart.addEventListener("pointerdown", function (event) {
@@ -3005,7 +3467,7 @@
         if (event.target && event.target.closest && event.target.closest("#start-button")) {
           return;
         }
-        startRun();
+        playTitleBgm(false);
       });
     }
     if (retryButton) {
@@ -3113,8 +3575,33 @@
       primeSprite(IP_THEME.booster, "booster");
       primeSprite(IP_THEME.moleObstacle, "moleObstacle");
       primeSprite(IP_THEME.movingEnemy, "movingEnemy");
+      primeSprite(IP_THEME.ingameBackground, "ingameBackground");
+      primeSprite(IP_THEME.sideTree, "sideTree");
+      primeSprite(IP_THEME.sideSign, "sideSign");
+      primeSprite(IP_THEME.sideIgloo, "sideIgloo");
       primeSprite(IP_THEME.projectile, "projectile");
+      ensureStartClickSfx();
+      ensureCountdownSfx();
+      ensureGoCountdownSfx();
+      ensureIngameBgm();
       bindInput();
+      document.addEventListener("visibilitychange", function () {
+        if (
+          document.visibilityState === "visible" &&
+          sceneStart &&
+          sceneStart.classList.contains("scene-active")
+        ) {
+          playTitleBgm(false);
+        } else if (
+          document.visibilityState === "visible" &&
+          sceneGame &&
+          sceneGame.classList.contains("scene-active") &&
+          runtime.running &&
+          !runtime.countdownActive
+        ) {
+          playIngameBgm(false);
+        }
+      });
       switchScene(sceneStart);
     } catch (error) {
       sceneStart.innerHTML =

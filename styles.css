@@ -51,6 +51,17 @@ body {
   position: relative;
 }
 
+#scene-result {
+  position: relative;
+  min-height: min(640px, calc(100vh - 20px));
+  border-radius: 22px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(8, 23, 40, 0.1), rgba(8, 23, 40, 0.3)),
+    url("./assets/result_screen_bg.png") center / cover no-repeat;
+  box-shadow: 0 14px 36px rgba(6, 24, 38, 0.3);
+}
+
 .start-screen {
   position: relative;
   display: grid;
@@ -71,17 +82,17 @@ body {
 .tap-to-play-btn {
   position: absolute;
   left: 50%;
-  bottom: clamp(76px, 12vh, 126px);
+  bottom: clamp(16px, 4vh, 42px);
   transform: translateX(-50%);
   z-index: 2;
   border: none;
   background: transparent;
   padding: 0;
-  width: min(78%, 350px);
-  aspect-ratio: 1000 / 420;
+  width: min(54%, 250px);
+  aspect-ratio: 1227 / 706;
   overflow: visible;
   cursor: pointer;
-  filter: drop-shadow(0 10px 14px rgba(15, 74, 118, 0.32));
+  filter: drop-shadow(0 8px 12px rgba(15, 74, 118, 0.28));
   animation: tapPulse 1.15s ease-in-out infinite;
 }
 
@@ -112,11 +123,15 @@ body {
 }
 
 .result-panel {
-  min-height: min(620px, calc(100vh - 20px));
+  min-height: min(620px, calc(100vh - 32px));
   display: flex;
   flex-direction: column;
   justify-content: center;
   text-align: center;
+  margin: 6px;
+  background: rgba(16, 38, 63, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  backdrop-filter: blur(3px);
 }
 
 .result-panel h2 {
@@ -515,9 +530,9 @@ body {
   }
 
   .tap-to-play-btn {
-    bottom: clamp(64px, 11vh, 110px);
-    width: min(82%, 332px);
-    aspect-ratio: 1000 / 420;
+    bottom: clamp(14px, 3.4vh, 34px);
+    width: min(58%, 238px);
+    aspect-ratio: 1227 / 706;
   }
 
   .hud {
