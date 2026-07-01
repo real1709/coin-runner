@@ -1,9 +1,10 @@
 (function () {
   "use strict";
 
-  const APP_VERSION = "v1.1.3";
+  const APP_VERSION = "v1.1.4";
   const TITLE_BGM_SRC = "./assets/runner_game_title.mp3";
   const TITLE_BGM_VOLUME = 0.62;
+  const TITLE_BGM_AUTO_UNMUTE_MAX_RETRIES = 120;
   const START_CLICK_SFX_SRC = "./assets/ui_click_store.wav";
   const START_CLICK_SFX_VOLUME = 0.9;
   const COUNTDOWN_SFX_SRC = "./assets/count_number.wav";
@@ -145,6 +146,16 @@
       color: "#27c8bd",
       imageSrc: "./assets/moving_enemy.png"
     },
+    iceCrackObstacle: {
+      name: "회사IP_얼음균열",
+      color: "#4f84ad",
+      imageSrc: "./assets/ice_crack.png?v=20260701_1502"
+    },
+    iceWallObstacle: {
+      name: "회사IP_얼음벽",
+      color: "#52789a",
+      imageSrc: "./assets/ice_wall.png?v=20260701_1502"
+    },
     ingameBackground: {
       name: "회사IP_인게임배경",
       color: "#bfe8ff",
@@ -251,14 +262,14 @@
     {
       stageId: 1,
       durationSec: 24,
-      obstacleSet: ["hole_enemy", "ice_crack", "small_block"],
+      obstacleSet: ["hole_enemy", "ice_crack", "ice_wall"],
       spawnPattern: {
         minGap: 1.0,
         maxGap: 1.8,
         weights: {
           hole_enemy: 0.4,
           ice_crack: 0.35,
-          small_block: 0.25
+          ice_wall: 0.25
         }
       },
       difficultyTier: "easy",
@@ -325,7 +336,11 @@
   const STORAGE_KEY = "ip_runner_telemetry_v1";
   const LEADERBOARD_KEY = "ip_runner_distance_leaderboard_v1";
   const USER_KEY = "ip_runner_anonymous_id";
+  const NICKNAME_KEY = "ip_runner_player_nickname_v1";
+  const TAUNT_KEY = "ip_runner_player_taunt_v1";
   let memoryAnonymousId = null;
+  let memoryNickname = "";
+  let memoryTaunt = "";
   let memoryQueue = [];
   let memoryLeaderboard = [];
 
@@ -341,6 +356,78 @@
   }
 
   const storageEnabled = canUseStorage();
+
+  function sanitizeNickname(raw) {
+    return String(raw || "")
+      .replace(/\s+/g, " ")
+      .replace(/[<>]/g, "")
+      .trim()
+      .slice(0, 12);
+  }
+
+  function sanitizeTaunt(raw) {
+    return String(raw || "")
+      .replace(/\s+/g, " ")
+      .replace(/[<>]/g, "")
+      .trim()
+      .slice(0, 20);
+  }
+
+  function readPlayerNickname() {
+    if (storageEnabled) {
+      try {
+        return sanitizeNickname(localStorage.getItem(NICKNAME_KEY) || "");
+      } catch (_err) {
+        // Fall through to memory nickname.
+      }
+    }
+    return sanitizeNickname(memoryNickname);
+  }
+
+  function persistPlayerNickname(raw) {
+    const safeNickname = sanitizeNickname(raw);
+    if (storageEnabled) {
+      try {
+        if (safeNickname) {
+          localStorage.setItem(NICKNAME_KEY, safeNickname);
+        } else {
+          localStorage.removeItem(NICKNAME_KEY);
+        }
+      } catch (_err) {
+        // Fall through to memory nickname.
+      }
+    }
+    memoryNickname = safeNickname;
+    return safeNickname;
+  }
+
+  function readPlayerTaunt() {
+    if (storageEnabled) {
+      try {
+        return sanitizeTaunt(localStorage.getItem(TAUNT_KEY) || "");
+      } catch (_err) {
+        // Fall through to memory taunt.
+      }
+    }
+    return sanitizeTaunt(memoryTaunt);
+  }
+
+  function persistPlayerTaunt(raw) {
+    const safeTaunt = sanitizeTaunt(raw);
+    if (storageEnabled) {
+      try {
+        if (safeTaunt) {
+          localStorage.setItem(TAUNT_KEY, safeTaunt);
+        } else {
+          localStorage.removeItem(TAUNT_KEY);
+        }
+      } catch (_err) {
+        // Fall through to memory taunt.
+      }
+    }
+    memoryTaunt = safeTaunt;
+    return safeTaunt;
+  }
 
   function getOrCreateAnonymousId() {
     if (storageEnabled) {
@@ -428,6 +515,8 @@
       .map(function (entry) {
         return {
           id: String(entry.id || ""),
+          nickname: sanitizeNickname(entry.nickname || ""),
+          taunt: sanitizeTaunt(entry.taunt || ""),
           distance: Math.max(0, Number(entry.distance) || 0),
           level: Math.max(1, Number(entry.level) || 1),
           timestamp: Number(entry.timestamp) || 0
@@ -469,6 +558,8 @@
   function saveLeaderboardEntry(distance, level) {
     const entry = {
       id: "run_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+      nickname: playerNickname || "플레이어",
+      taunt: playerTaunt || "",
       distance: Math.round(distance),
       level: Math.max(1, Math.round(level)),
       timestamp: Date.now()
@@ -489,38 +580,55 @@
       return;
     }
     resultRanking.innerHTML = "";
-    const currentIndex = leaderboard.findIndex(function (item) {
-      return item.id === currentEntryId;
-    });
-    const visibleEntries = leaderboard.slice(0, 5);
-    if (currentIndex >= 5) {
-      visibleEntries.push(leaderboard[currentIndex]);
-    }
+    resultRanking.scrollTop = 0;
+    let currentRunElement = null;
 
-    visibleEntries.forEach(function (entry) {
-      const rank =
-        leaderboard.findIndex(function (item) {
-          return item.id === entry.id;
-        }) + 1;
+    leaderboard.forEach(function (entry, index) {
+      const rank = index + 1;
       const item = document.createElement("li");
       if (entry.id === currentEntryId) {
         item.classList.add("current-run");
+        currentRunElement = item;
       }
 
       const rankText = document.createElement("span");
       rankText.className = "rank-position";
       rankText.textContent = rank + "위";
 
+      const mainText = document.createElement("div");
+      mainText.className = "rank-main";
+
+      const nicknameText = document.createElement("span");
+      nicknameText.className = "rank-name";
+      nicknameText.textContent = entry.nickname || "플레이어";
+
       const distanceText = document.createElement("strong");
       distanceText.textContent = entry.distance.toLocaleString("ko-KR") + "m";
+      mainText.append(nicknameText, distanceText);
 
-      const levelText = document.createElement("span");
-      levelText.className = "rank-level";
-      levelText.textContent = entry.level + "단계";
+      const tauntWrap = document.createElement("div");
+      tauntWrap.className = "rank-taunt";
 
-      item.append(rankText, distanceText, levelText);
+      const tauntText = document.createElement("span");
+      tauntText.className = "rank-taunt-text";
+      tauntText.textContent = entry.taunt || "기록 깨고 한마디 남겨!";
+
+      const tauntAuthor = document.createElement("span");
+      tauntAuthor.className = "rank-taunt-author";
+      tauntAuthor.textContent = "- " + (entry.nickname || "플레이어");
+
+      tauntWrap.append(tauntText, tauntAuthor);
+      item.append(rankText, mainText, tauntWrap);
       resultRanking.append(item);
     });
+
+    if (currentRunElement && resultRanking.scrollHeight > resultRanking.clientHeight) {
+      const centerOffset =
+        currentRunElement.offsetTop -
+        resultRanking.clientHeight * 0.5 +
+        currentRunElement.offsetHeight * 0.5;
+      resultRanking.scrollTop = Math.max(0, centerOffset);
+    }
   }
 
   const sceneStart = document.getElementById("scene-start");
@@ -536,6 +644,13 @@
   const moveRightButton = document.getElementById("move-right-btn");
   const pauseToggleButton = document.getElementById("pause-toggle-btn");
   const stageOverlay = document.getElementById("stage-overlay");
+  const nicknameModal = document.getElementById("nickname-modal");
+  const nicknameForm = document.getElementById("nickname-form");
+  const nicknameInput = document.getElementById("nickname-input");
+  const nicknameError = document.getElementById("nickname-error");
+  const resultTauntInput = document.getElementById("result-taunt-input");
+  const resultTauntSaveButton = document.getElementById("result-taunt-save-button");
+  const resultTauntHint = document.getElementById("result-taunt-hint");
   const hudCharacter = document.getElementById("hud-character");
   const hudStage = document.getElementById("hud-stage");
   const hudTime = document.getElementById("hud-time");
@@ -547,7 +662,6 @@
   const survivalValue = document.getElementById("survival-value");
   const resultTitle = document.getElementById("result-title");
   const resultStage = document.getElementById("result-stage");
-  const resultLevel = document.getElementById("result-level");
   const resultRanking = document.getElementById("result-ranking");
   const versionLabel = document.getElementById("app-version");
   const canvas = document.getElementById("game-canvas");
@@ -574,6 +688,9 @@
   let selectedCharacterIndex = 0;
   let shareVariant = "A";
   let countdownTimers = [];
+  let playerNickname = readPlayerNickname();
+  let playerTaunt = readPlayerTaunt();
+  let latestResultEntryId = "";
 
   const runtime = {
     running: false,
@@ -633,9 +750,26 @@
       color: "#76334c",
       lane: "hole_pop"
     },
-    ice_crack: { width: 46, height: 24, color: "#4f84ad", lane: "ground" },
-    small_block: { width: 40, height: 42, color: "#699ec5", lane: "ground" },
-    ice_wall: { width: 48, height: 58, color: "#52789a", lane: "ground" },
+    ice_crack: {
+      width: 100,
+      height: 40,
+      color: "#4f84ad",
+      lane: "ground",
+      groundOffsetRatio: 0.15,
+      laneWidthRatio: 0.9,
+      sizeScale: 1,
+      heightScale: 1.5
+    },
+    ice_wall: {
+      width: 58,
+      height: 58,
+      color: "#52789a",
+      lane: "ground",
+      groundOffsetRatio: 0.12,
+      laneWidthRatio: 0.8,
+      sizeScale: 1.2,
+      heightScale: 1
+    },
     slope_hole: { width: 128, height: 156, color: "#a96532", lane: "mole_pop", laneSpan: 2 },
     storm_gate: { width: 52, height: 66, color: "#395f81", lane: "ground" },
     moving_crate: { width: 70, height: 86, color: "#27c8bd", lane: "moving" },
@@ -658,6 +792,8 @@
       key === "holeEnemy" ||
       key === "moleObstacle" ||
       key === "movingEnemy" ||
+      key === "iceCrackObstacle" ||
+      key === "iceWallObstacle" ||
       key === "sideTree" ||
       key === "sideSign" ||
       key === "sideIgloo" ||
@@ -1025,6 +1161,8 @@
     audio.loop = true;
     audio.autoplay = true;
     audio.preload = "auto";
+    audio.muted = false;
+    audio.defaultMuted = false;
     audio.volume = TITLE_BGM_VOLUME;
     audio.setAttribute("playsinline", "true");
     titleBgm = audio;
@@ -1201,11 +1339,14 @@
       }
       audio.muted = false;
       audio.volume = TITLE_BGM_VOLUME;
+      if (!audio.paused) {
+        return;
+      }
       const audibleAttempt = audio.play();
       if (audibleAttempt && typeof audibleAttempt.catch === "function") {
         audibleAttempt.catch(function () {
           audio.muted = true;
-          if (retryCount < 8) {
+          if (retryCount < TITLE_BGM_AUTO_UNMUTE_MAX_RETRIES) {
             queueTitleBgmAutoUnmute(retryCount + 1);
           } else {
             bindTitleBgmUnlock();
@@ -1248,12 +1389,18 @@
       }
     }
     audio.volume = TITLE_BGM_VOLUME;
-    audio.muted = true;
+    audio.muted = false;
     const playAttempt = audio.play();
     if (playAttempt && typeof playAttempt.catch === "function") {
       playAttempt.catch(function () {
-        // Autoplay blocked fully, wait for unlock interaction.
-        bindTitleBgmUnlock();
+        // Fall back to muted autoplay, then keep trying to enable audible playback.
+        audio.muted = true;
+        const mutedAttempt = audio.play();
+        if (mutedAttempt && typeof mutedAttempt.catch === "function") {
+          mutedAttempt.catch(function () {
+            bindTitleBgmUnlock();
+          });
+        }
       });
     }
     queueTitleBgmAutoUnmute(0);
@@ -1711,6 +1858,101 @@
     updatePauseToggleButton();
   }
 
+  function setNicknameError(text) {
+    if (!nicknameError) {
+      return;
+    }
+    nicknameError.textContent = text || "";
+  }
+
+  function closeNicknameModal() {
+    if (!nicknameModal) {
+      return;
+    }
+    nicknameModal.classList.add("hidden");
+    nicknameModal.setAttribute("aria-hidden", "true");
+    setNicknameError("");
+  }
+
+  function openNicknameModal() {
+    if (!nicknameModal) {
+      return;
+    }
+    nicknameModal.classList.remove("hidden");
+    nicknameModal.setAttribute("aria-hidden", "false");
+    setNicknameError("");
+    if (nicknameInput) {
+      nicknameInput.value = playerNickname || "";
+      window.requestAnimationFrame(function () {
+        nicknameInput.focus();
+        nicknameInput.select();
+      });
+    }
+  }
+
+  function submitNicknameAndStart() {
+    const safeNickname = sanitizeNickname(nicknameInput ? nicknameInput.value : "");
+    if (!safeNickname) {
+      setNicknameError("닉네임을 1자 이상 입력해줘");
+      if (nicknameInput) {
+        nicknameInput.focus();
+      }
+      return;
+    }
+    playerNickname = persistPlayerNickname(safeNickname);
+    closeNicknameModal();
+    startRun();
+  }
+
+  function setResultTauntHint(text) {
+    if (!resultTauntHint) {
+      return;
+    }
+    resultTauntHint.textContent = text || "";
+  }
+
+  function syncResultTauntEditor() {
+    if (resultTauntInput) {
+      resultTauntInput.value = playerTaunt || "";
+    }
+    setResultTauntHint("저장하면 현재 기록에 반영돼");
+  }
+
+  function applyTauntToEntry(entryId, tauntText) {
+    if (!entryId) {
+      return;
+    }
+    const leaderboard = readLeaderboard();
+    let changed = false;
+    const updatedEntries = leaderboard.map(function (entry) {
+      if (entry.id !== entryId) {
+        return entry;
+      }
+      changed = true;
+      return Object.assign({}, entry, { taunt: tauntText });
+    });
+    if (!changed) {
+      return;
+    }
+    const persisted = persistLeaderboard(updatedEntries);
+    renderResultRanking(persisted, entryId);
+  }
+
+  function submitResultTaunt() {
+    const safeTaunt = sanitizeTaunt(resultTauntInput ? resultTauntInput.value : "");
+    playerTaunt = persistPlayerTaunt(safeTaunt);
+    if (latestResultEntryId) {
+      applyTauntToEntry(latestResultEntryId, playerTaunt);
+      setResultTauntHint("저장 완료");
+    } else {
+      setResultTauntHint("저장 완료");
+    }
+    playerTaunt = persistPlayerTaunt("");
+    if (resultTauntInput) {
+      resultTauntInput.value = "";
+    }
+  }
+
   function stageByIndex(index) {
     const safeIndex = Number.isFinite(index) ? index : 0;
     return stages[Math.max(0, Math.min(safeIndex, stages.length - 1))] || stages[0];
@@ -1891,6 +2133,10 @@
       height: base.height,
       color: base.color,
       moveLane: base.lane,
+      groundOffsetRatio: Number(base.groundOffsetRatio || 0),
+      laneWidthRatio: Number(base.laneWidthRatio || 0),
+      sizeScale: Number(base.sizeScale || 1),
+      heightScale: Number(base.heightScale || 1),
       spitDone: false,
       passed: false,
       wobble: Math.random() * Math.PI * 2
@@ -2104,7 +2350,7 @@
         laneSpan
       });
     }
-    const maxLaneRatio =
+    const defaultLaneRatio =
       obstacle.moveLane === "mole_pop"
         ? 0.9
         : obstacle.moveLane === "hole_pop"
@@ -2112,17 +2358,27 @@
         : obstacle.moveLane === "moving"
         ? 0.88
         : 0.64;
+    const laneWidthRatio = Number.isFinite(obstacle.laneWidthRatio) && obstacle.laneWidthRatio > 0
+      ? Math.min(1.4, Math.max(0.2, obstacle.laneWidthRatio))
+      : defaultLaneRatio;
+    const sizeScale = Number.isFinite(obstacle.sizeScale) && obstacle.sizeScale > 0
+      ? Math.min(2.5, Math.max(0.2, obstacle.sizeScale))
+      : 1;
+    const heightScale = Number.isFinite(obstacle.heightScale) && obstacle.heightScale > 0
+      ? Math.min(3, Math.max(0.2, obstacle.heightScale))
+      : 1;
     const size = centeredDrawSize(
-      obstacle.width,
-      obstacle.height,
+      obstacle.width * sizeScale,
+      obstacle.height * sizeScale * heightScale,
       projected.scale,
       projected.laneWidth,
-      maxLaneRatio
+      laneWidthRatio
     );
     const drawWidth = size.width;
     const drawHeight = size.height;
     const drawX = projected.x - drawWidth / 2;
-    const drawY = projected.y - drawHeight;
+    const groundOffsetRatio = Number(obstacle.groundOffsetRatio || 0);
+    const drawY = projected.y - drawHeight + drawHeight * groundOffsetRatio;
     return { projected, drawX, drawY, drawWidth, drawHeight };
   }
 
@@ -2255,10 +2511,11 @@
     const finalDistance = Math.round(runtime.distanceMeters);
     const finalLevel = runtime.speedTier + 1;
     const ranking = saveLeaderboardEntry(finalDistance, finalLevel);
+    latestResultEntryId = ranking.entry.id;
     resultTitle.textContent = "GAME OVER";
     resultStage.textContent = String(finalDistance);
-    resultLevel.textContent = String(finalLevel);
     renderResultRanking(ranking.leaderboard, ranking.entry.id);
+    syncResultTauntEditor();
     switchScene(sceneResult);
     applyShareVariant();
   }
@@ -2853,6 +3110,13 @@
         return;
       }
 
+      if (obstacle.type === "ice_crack" || obstacle.type === "ice_wall") {
+        const spriteKey = obstacle.type === "ice_crack" ? "iceCrackObstacle" : "iceWallObstacle";
+        if (drawCroppedSprite(spriteKey, drawX, drawY, drawWidth, drawHeight)) {
+          return;
+        }
+      }
+
       const obstacleGrad = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawHeight);
       obstacleGrad.addColorStop(0, "rgba(255,255,255,0.18)");
       obstacleGrad.addColorStop(1, obstacle.color);
@@ -3423,7 +3687,8 @@
 
   async function onShare() {
     const text =
-      "PENGUIN DASH 결과 | 거리 " +
+      (playerNickname || "플레이어") +
+      " | PENGUIN DASH 결과 | 거리 " +
       Math.round(runtime.distanceMeters) +
       "m | 단계 " +
       (runtime.speedTier + 1) +
@@ -3456,12 +3721,31 @@
     if (startButton) {
       startButton.addEventListener("click", function () {
         playStartClickSfx();
-        startRun();
+        openNicknameModal();
+      });
+    }
+    if (nicknameForm) {
+      nicknameForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        submitNicknameAndStart();
+      });
+    }
+    if (nicknameInput) {
+      nicknameInput.addEventListener("input", function () {
+        setNicknameError("");
       });
     }
     if (sceneStart) {
       sceneStart.addEventListener("pointerdown", function (event) {
         if (!sceneStart.classList.contains("scene-active")) {
+          return;
+        }
+        if (
+          nicknameModal &&
+          !nicknameModal.classList.contains("hidden") &&
+          (!nicknameForm ||
+            !(event.target && event.target.closest && event.target.closest("#nickname-form")))
+        ) {
           return;
         }
         if (event.target && event.target.closest && event.target.closest("#start-button")) {
@@ -3483,6 +3767,21 @@
     }
     if (shareButton) {
       shareButton.addEventListener("click", onShare);
+    }
+    if (resultTauntSaveButton) {
+      resultTauntSaveButton.addEventListener("click", submitResultTaunt);
+    }
+    if (resultTauntInput) {
+      resultTauntInput.addEventListener("input", function () {
+        setResultTauntHint("저장 버튼을 누르면 반영돼");
+      });
+      resultTauntInput.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        submitResultTaunt();
+      });
     }
     if (skillButton) {
       skillButton.addEventListener("click", runSkill);
@@ -3575,6 +3874,8 @@
       primeSprite(IP_THEME.booster, "booster");
       primeSprite(IP_THEME.moleObstacle, "moleObstacle");
       primeSprite(IP_THEME.movingEnemy, "movingEnemy");
+      primeSprite(IP_THEME.iceCrackObstacle, "iceCrackObstacle");
+      primeSprite(IP_THEME.iceWallObstacle, "iceWallObstacle");
       primeSprite(IP_THEME.ingameBackground, "ingameBackground");
       primeSprite(IP_THEME.sideTree, "sideTree");
       primeSprite(IP_THEME.sideSign, "sideSign");
@@ -3584,6 +3885,7 @@
       ensureCountdownSfx();
       ensureGoCountdownSfx();
       ensureIngameBgm();
+      syncResultTauntEditor();
       bindInput();
       document.addEventListener("visibilitychange", function () {
         if (
@@ -3600,6 +3902,16 @@
           !runtime.countdownActive
         ) {
           playIngameBgm(false);
+        }
+      });
+      window.addEventListener("focus", function () {
+        if (sceneStart && sceneStart.classList.contains("scene-active")) {
+          playTitleBgm(false);
+        }
+      });
+      window.addEventListener("pageshow", function () {
+        if (sceneStart && sceneStart.classList.contains("scene-active")) {
+          playTitleBgm(false);
         }
       });
       switchScene(sceneStart);

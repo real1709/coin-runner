@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IP Endless Runner Demo</title>
+    <link rel="stylesheet" href="./styles.css?v=1.1.4-release" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <main id="scene-start" class="scene scene-active">
+        <section class="start-screen" aria-label="시작 화면">
+          <img
+            class="start-cover-image"
+            src="./assets/start_title_characters.png"
+            alt="게임 시작 화면"
+          />
+          <button
+            id="start-button"
+            class="tap-to-play-btn"
+            type="button"
+            aria-label="Tap to Play"
+          >
+            <img
+              class="tap-to-play-image"
+              src="./assets/tap_to_play_new.png"
+              alt="Tap to Play"
+            />
+          </button>
+          <div id="nickname-modal" class="nickname-modal hidden" aria-hidden="true">
+            <form id="nickname-form" class="nickname-panel" autocomplete="off">
+              <h3>닉네임 설정</h3>
+              <p>랭킹에 표시할 이름을 입력해줘</p>
+              <input
+                id="nickname-input"
+                class="nickname-input"
+                type="text"
+                maxlength="12"
+                placeholder="예: 펭귄러너"
+                inputmode="text"
+              />
+              <p id="nickname-error" class="nickname-error" aria-live="polite"></p>
+              <button id="nickname-confirm-button" class="primary nickname-confirm" type="submit">
+                확인하고 시작
+              </button>
+            </form>
+          </div>
+        </section>
+      </main>
+
+      <main id="scene-game" class="scene">
+        <section class="hud">
+          <div class="hud-chip hud-chip-distance">
+            거리 <strong id="hud-stage">0</strong>m
+          </div>
+          <div class="hud-chip hud-chip-level">
+            단계 <strong id="hud-time">1</strong>
+          </div>
+          <div class="hud-hidden" aria-hidden="true">캐릭터 <strong id="hud-character"></strong></div>
+          <div class="hud-hidden" aria-hidden="true">미션 <strong id="hud-mission">점수 1200+</strong></div>
+          <div class="hud-hidden" aria-hidden="true">스킬 <strong id="hud-skill">준비됨</strong></div>
+          <div class="hud-hidden" aria-hidden="true">점수 <strong id="hud-score">0</strong></div>
+          <div class="hud-hidden" aria-hidden="true">수집 <strong id="hud-token">0</strong></div>
+        </section>
+        <canvas id="game-canvas" width="390" height="640"></canvas>
+        <section class="survival-ui" aria-label="생존 게이지">
+          <div class="survival-track">
+            <div id="survival-fill" class="survival-fill"></div>
+          </div>
+          <div class="survival-label">
+            생존 게이지 <strong id="survival-value">100%</strong>
+          </div>
+        </section>
+        <div id="stage-overlay" class="overlay hidden"></div>
+        <div class="mobile-controls" aria-label="모바일 이동 컨트롤">
+          <button id="move-left-btn" class="move-btn" type="button">◀ 좌</button>
+          <button
+            id="pause-toggle-btn"
+            class="pause-toggle-btn"
+            type="button"
+            aria-label="Pause"
+          >
+            PAUSE
+          </button>
+          <button id="move-right-btn" class="move-btn" type="button">우 ▶</button>
+        </div>
+      </main>
+
+      <main id="scene-result" class="scene">
+        <section class="panel result-panel">
+          <h2 id="result-title">GAME OVER</h2>
+          <div class="result-stats">
+            <p>최종 거리 <strong id="result-stage">0</strong>m</p>
+          </div>
+          <section class="taunt-editor" aria-label="도발 메시지 설정">
+            <label class="taunt-label" for="result-taunt-input">도발 한마디</label>
+            <div class="taunt-controls">
+              <input
+                id="result-taunt-input"
+                class="taunt-input"
+                type="text"
+                maxlength="20"
+                placeholder="예: 700m 넘기면 인정"
+                inputmode="text"
+              />
+              <button id="result-taunt-save-button" class="secondary taunt-save" type="button">
+                저장
+              </button>
+            </div>
+            <p id="result-taunt-hint" class="muted taunt-hint">
+              저장하면 현재 기록에 반영돼
+            </p>
+          </section>
+          <section class="ranking-board" aria-label="거리 순위">
+            <h3>거리 순위</h3>
+            <ol id="result-ranking" class="result-ranking"></ol>
+          </section>
+          <div class="actions">
+            <button id="retry-button" class="primary">즉시 재도전</button>
+            <button id="share-button" class="secondary">공유</button>
+          </div>
+          <p class="muted result-meta" id="share-hint">공유 버튼 A/B 테스트 중</p>
+        </section>
+      </main>
+    </div>
+
+    <script src="./src/main.bundle.js?v=1.1.4-release"></script>
+  </body>
+</html>

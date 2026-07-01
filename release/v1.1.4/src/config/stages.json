@@ -1,0 +1,50 @@
+[
+  {
+    "stageId": 1,
+    "durationSec": 24,
+    "obstacleSet": ["ice_crack", "small_block", "cold_flag"],
+    "spawnPattern": {
+      "minGap": 1.0,
+      "maxGap": 1.8,
+      "weights": {
+        "ice_crack": 0.45,
+        "small_block": 0.35,
+        "cold_flag": 0.2
+      }
+    },
+    "difficultyTier": "easy",
+    "clearReward": "브랜드 스티커 1"
+  },
+  {
+    "stageId": 2,
+    "durationSec": 25,
+    "obstacleSet": ["ice_wall", "slope_hole", "drone_banner"],
+    "spawnPattern": {
+      "minGap": 0.85,
+      "maxGap": 1.5,
+      "weights": {
+        "ice_wall": 0.35,
+        "slope_hole": 0.4,
+        "drone_banner": 0.25
+      }
+    },
+    "difficultyTier": "normal",
+    "clearReward": "프로모션 쿠폰 조각"
+  },
+  {
+    "stageId": 3,
+    "durationSec": 26,
+    "obstacleSet": ["storm_gate", "moving_crate", "laser_sign"],
+    "spawnPattern": {
+      "minGap": 0.72,
+      "maxGap": 1.2,
+      "weights": {
+        "storm_gate": 0.3,
+        "moving_crate": 0.45,
+        "laser_sign": 0.25
+      }
+    },
+    "difficultyTier": "hard",
+    "clearReward": "한정 캐릭터 배지"
+  }
+]

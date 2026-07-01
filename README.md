@@ -11,7 +11,7 @@
 (`file://` 실행 호환을 위해 `src/main.bundle.js` 단일 스크립트를 기본 로더로 사용합니다.)
 
 ## 2) 핵심 스펙
-- 버전: `v1.1.3`
+- 버전: `v1.1.4`
 - 진행 방식: 원근 기반 세로 무한 러너
 - 레인: 5레인 좌우 이동
 - 조작: 좌/우 이동(좌측 탭/우측 탭 또는 ←/→, A/D, 모바일 좌/우 버튼)
@@ -46,10 +46,10 @@
 - 설정 검증: `npm run validate:config`
 
 ## 5) 배포 3종 세트
-- 버전 태그: `v1.1.3`
+- 버전 태그: `v1.1.4`
 - 웹 URL: `release/artifact-manifest.json`의 `webUrl`
 - 변경로그: `CHANGELOG.md`
-- 저장 스냅샷: `release/v1.1.3`
+- 저장 스냅샷: `release/v1.1.4`
 
 ## 6) 계획 문서
 - 1주 실행 일정: `docs/EXECUTION_SCHEDULE.md`
