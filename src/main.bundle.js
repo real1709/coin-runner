@@ -17,11 +17,13 @@
   const MOBILE_PERF_MODE =
     typeof navigator !== "undefined" &&
     /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
-  const SIDE_PROP_SLOT_COUNT = MOBILE_PERF_MODE ? 1 : 3;
-  const MAX_ACTIVE_COLLECTIBLES = MOBILE_PERF_MODE ? 8 : 18;
-  const MAX_ACTIVE_POISON_SHOTS = MOBILE_PERF_MODE ? 4 : 12;
+  const SIDE_PROP_SLOT_COUNT = MOBILE_PERF_MODE ? 0 : 3;
+  const MAX_ACTIVE_COLLECTIBLES = MOBILE_PERF_MODE ? 6 : 18;
+  const MAX_ACTIVE_POISON_SHOTS = MOBILE_PERF_MODE ? 3 : 12;
   const HUD_UPDATE_INTERVAL_SEC = MOBILE_PERF_MODE ? 0.12 : 0.05;
   const SPRITE_RENDER_MAX_DIM = MOBILE_PERF_MODE ? 420 : 900;
+  const OBSTACLE_RENDER_SMOOTHING = MOBILE_PERF_MODE ? 18 : 0;
+  const COLLECTIBLE_RENDER_SMOOTHING = MOBILE_PERF_MODE ? 20 : 0;
   const MISSION_SCORE_TARGET = 1200;
   const MISSION_DISTANCE_TARGET = 900;
   const MISSION_COLLECTIBLE_TARGET = 7;
@@ -2184,9 +2186,11 @@
     const laneSpan = Math.max(1, Math.min(LANE_COUNT, Math.round(base.laneSpan || 1)));
     const maxStartLane = Math.max(0, LANE_COUNT - laneSpan);
     const lane = Math.floor(Math.random() * (maxStartLane + 1));
+    const spawnDepth = enemyAwareSpawnDepth(base);
     runtime.obstacles.push({
       type: obstacleType,
-      depth: enemyAwareSpawnDepth(base),
+      depth: spawnDepth,
+      visualDepth: spawnDepth,
       lane: lane,
       laneSpan,
       laneOffset: 0,
@@ -2260,9 +2264,11 @@
     const panicMode = runtime.survivalGauge < 34;
     if (shouldSpawnPowerupItem()) {
       const laneIndex = Math.random() < 0.68 ? 0 : Math.min(1, lanes.length - 1);
+      const boosterDepth = randomRange(-0.24, 0.02);
       runtime.collectibles.push({
         kind: "booster",
-        depth: randomRange(-0.24, 0.02),
+        depth: boosterDepth,
+        visualDepth: boosterDepth,
         lane: lanes[laneIndex],
         laneOffset: 0,
         width: collectibleConfig.width * 1.62,
@@ -2289,8 +2295,10 @@
     waveSize = Math.max(1, waveSize);
     const baseDepth = randomRange(-0.24, 0.02);
     for (let i = 0; i < waveSize; i += 1) {
+      const coinDepth = baseDepth - i * randomRange(0.035, 0.08);
       runtime.collectibles.push({
-        depth: baseDepth - i * randomRange(0.035, 0.08),
+        depth: coinDepth,
+        visualDepth: coinDepth,
         lane: lanes[i % lanes.length],
         laneOffset: 0,
         kind: "coin",
@@ -2402,16 +2410,19 @@
     return Math.max(1, Math.min(LANE_COUNT - safeLane, requestedSpan));
   }
 
-  function getObstacleDrawInfo(obstacle) {
-    if (obstacle._drawInfoToken === runtime.frameToken && obstacle._drawInfoCache) {
+  function getObstacleDrawInfo(obstacle, useVisualDepth) {
+    const useVisual = useVisualDepth !== false;
+    if (useVisual && obstacle._drawInfoToken === runtime.frameToken && obstacle._drawInfoCache) {
       return obstacle._drawInfoCache;
     }
     const renderLane = Number.isFinite(obstacle.visualLane)
       ? obstacle.visualLane
       : obstacle.lane;
+    const renderDepth =
+      useVisual && Number.isFinite(obstacle.visualDepth) ? obstacle.visualDepth : obstacle.depth;
     const baseProjected = projectLanePoint(
       renderLane,
-      obstacle.depth,
+      renderDepth,
       obstacle.laneOffset
     );
     const laneSpan = obstacleLaneSpan(obstacle);
@@ -2457,13 +2468,15 @@
     const groundOffsetRatio = Number(obstacle.groundOffsetRatio || 0);
     const drawY = projected.y - drawHeight + drawHeight * groundOffsetRatio;
     const info = { projected, drawX, drawY, drawWidth, drawHeight };
-    obstacle._drawInfoToken = runtime.frameToken;
-    obstacle._drawInfoCache = info;
+    if (useVisual) {
+      obstacle._drawInfoToken = runtime.frameToken;
+      obstacle._drawInfoCache = info;
+    }
     return info;
   }
 
-  function getObstacleHitbox(obstacle) {
-    const info = getObstacleDrawInfo(obstacle);
+  function getObstacleHitbox(obstacle, useVisualDepth) {
+    const info = getObstacleDrawInfo(obstacle, useVisualDepth);
     if (obstacle.moveLane === "hole_pop") {
       return {
         left: info.drawX + info.drawWidth * 0.16,
@@ -2499,11 +2512,14 @@
     };
   }
 
-  function getCollectibleDrawInfo(item) {
-    if (item._drawInfoToken === runtime.frameToken && item._drawInfoCache) {
+  function getCollectibleDrawInfo(item, useVisualDepth) {
+    const useVisual = useVisualDepth !== false;
+    if (useVisual && item._drawInfoToken === runtime.frameToken && item._drawInfoCache) {
       return item._drawInfoCache;
     }
-    const projected = projectLanePoint(item.lane, item.depth, item.laneOffset);
+    const renderDepth =
+      useVisual && Number.isFinite(item.visualDepth) ? item.visualDepth : item.depth;
+    const projected = projectLanePoint(item.lane, renderDepth, item.laneOffset);
     const size = centeredDrawSize(
       item.width,
       item.height,
@@ -2531,8 +2547,10 @@
       coinCenterY,
       coinRadius
     };
-    item._drawInfoToken = runtime.frameToken;
-    item._drawInfoCache = info;
+    if (useVisual) {
+      item._drawInfoToken = runtime.frameToken;
+      item._drawInfoCache = info;
+    }
     return info;
   }
 
@@ -2689,6 +2707,15 @@
 
     runtime.obstacles.forEach(function (obstacle) {
       obstacle.depth += forwardRate * currentApproachMultiplier() * dt;
+      if (MOBILE_PERF_MODE) {
+        if (!Number.isFinite(obstacle.visualDepth)) {
+          obstacle.visualDepth = obstacle.depth;
+        }
+        obstacle.visualDepth +=
+          (obstacle.depth - obstacle.visualDepth) * Math.min(1, dt * OBSTACLE_RENDER_SMOOTHING);
+      } else {
+        obstacle.visualDepth = obstacle.depth;
+      }
       if (obstacle.moveLane === "moving") {
         updateMovingObstacle(obstacle, dt);
       } else if (obstacle.moveLane === "hole_pop") {
@@ -2705,6 +2732,15 @@
 
     runtime.collectibles.forEach(function (item) {
       item.depth += forwardRate * collectibleApproachMultiplier * dt;
+      if (MOBILE_PERF_MODE) {
+        if (!Number.isFinite(item.visualDepth)) {
+          item.visualDepth = item.depth;
+        }
+        item.visualDepth +=
+          (item.depth - item.visualDepth) * Math.min(1, dt * COLLECTIBLE_RENDER_SMOOTHING);
+      } else {
+        item.visualDepth = item.depth;
+      }
       item.wobble += dt * 5;
       item.laneOffset = 0;
     });
@@ -2725,7 +2761,7 @@
     const playerHitbox = getPlayerHitbox();
     const collectedItems = [];
     runtime.collectibles.forEach(function (item, index) {
-      const collectibleInfo = getCollectibleDrawInfo(item);
+      const collectibleInfo = getCollectibleDrawInfo(item, false);
       const collectibleCircle = {
         x: collectibleInfo.coinCenterX,
         y: collectibleInfo.coinCenterY,
@@ -2806,7 +2842,7 @@
     }
 
     const hitObstacle = runtime.obstacles.find(function (obstacle) {
-      return rectsOverlap(getObstacleHitbox(obstacle), playerHitbox);
+      return rectsOverlap(getObstacleHitbox(obstacle, false), playerHitbox);
     });
 
     if (hitObstacle && isBoosterActive()) {
@@ -3598,6 +3634,9 @@
   }
 
   function renderSpeedFx() {
+    if (MOBILE_PERF_MODE) {
+      return;
+    }
     const usingImageBackground = isSpriteReady("ingameBackground");
     const startY = roadHorizonY() + canvas.height * 0.11;
     const endY = canvas.height + 78;
