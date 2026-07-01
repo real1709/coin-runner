@@ -14,7 +14,13 @@
   const INGAME_BGM_SRC = "./assets/run_ingame.mp3?v=20260630_1158";
   const INGAME_BGM_VOLUME = 0.58;
   const INGAME_BGM_START_DELAY_MS = 140;
-  const SIDE_PROP_SLOT_COUNT = 3;
+  const MOBILE_PERF_MODE =
+    typeof navigator !== "undefined" &&
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+  const SIDE_PROP_SLOT_COUNT = MOBILE_PERF_MODE ? 2 : 3;
+  const MAX_ACTIVE_COLLECTIBLES = MOBILE_PERF_MODE ? 10 : 18;
+  const MAX_ACTIVE_POISON_SHOTS = MOBILE_PERF_MODE ? 6 : 12;
+  const HUD_UPDATE_INTERVAL_SEC = MOBILE_PERF_MODE ? 0.12 : 0.05;
   const MISSION_SCORE_TARGET = 1200;
   const MISSION_DISTANCE_TARGET = 900;
   const MISSION_COLLECTIBLE_TARGET = 7;
@@ -739,7 +745,8 @@
       animTime: 0,
       lean: 0,
       bob: 0
-    }
+    },
+    hudRefreshClock: 0
   };
 
   const obstacleCatalog = {
@@ -1772,6 +1779,7 @@
     runtime.blinkTimer = 0;
     runtime.scrollSpeedNorm = 0.26;
     runtime.sideObjectFlow = 0;
+    runtime.hudRefreshClock = HUD_UPDATE_INTERVAL_SEC;
     updatePauseToggleButton();
 
     const player = runtime.player;
@@ -2190,6 +2198,9 @@
   }
 
   function spawnCollectible() {
+    if (runtime.collectibles.length >= MAX_ACTIVE_COLLECTIBLES) {
+      return;
+    }
     const lanes = collectibleLaneOrder();
     const panicMode = runtime.survivalGauge < 34;
     if (shouldSpawnPowerupItem()) {
@@ -2215,7 +2226,12 @@
     if (panicMode && Math.random() < 0.76) {
       waveSize += 1;
     }
-    waveSize = Math.max(1, Math.min(4, waveSize));
+    const remainingSlots = Math.max(0, MAX_ACTIVE_COLLECTIBLES - runtime.collectibles.length);
+    waveSize = Math.min(4, waveSize, remainingSlots);
+    if (waveSize <= 0) {
+      return;
+    }
+    waveSize = Math.max(1, waveSize);
     const baseDepth = randomRange(-0.24, 0.02);
     for (let i = 0; i < waveSize; i += 1) {
       runtime.collectibles.push({
@@ -2232,6 +2248,9 @@
   }
 
   function spawnPoisonShotsFromEnemy(obstacle, forwardRate) {
+    if (runtime.poisonShots.length >= MAX_ACTIVE_POISON_SHOTS) {
+      return;
+    }
     const projected = projectLanePoint(obstacle.lane, obstacle.depth, obstacle.laneOffset);
     const enemyScale = projected.scale;
     const enemyHeight = obstacle.height * enemyScale;
@@ -2564,6 +2583,7 @@
     runtime.speedKmh = metersPerSec * 3.6;
     runtime.distanceMeters += metersPerSec * dt;
     runtime.sideObjectFlow += forwardRate * collectibleApproachMultiplier * dt;
+    runtime.hudRefreshClock += dt;
 
     const nextSpeedTier = speedTierFromElapsed(runtime.totalElapsed);
     if (nextSpeedTier > runtime.speedTier) {
@@ -3293,20 +3313,22 @@
         return;
       }
 
-      const glow = ctx.createRadialGradient(
-        coinCenterX,
-        coinCenterY,
-        2,
-        coinCenterX,
-        coinCenterY,
-        coinRadius * 1.55
-      );
-      glow.addColorStop(0, "rgba(255, 224, 107, 0.82)");
-      glow.addColorStop(1, "rgba(255, 224, 107, 0)");
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(coinCenterX, coinCenterY, coinRadius * 1.55, 0, Math.PI * 2);
-      ctx.fill();
+      if (!MOBILE_PERF_MODE) {
+        const glow = ctx.createRadialGradient(
+          coinCenterX,
+          coinCenterY,
+          2,
+          coinCenterX,
+          coinCenterY,
+          coinRadius * 1.55
+        );
+        glow.addColorStop(0, "rgba(255, 224, 107, 0.82)");
+        glow.addColorStop(1, "rgba(255, 224, 107, 0)");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(coinCenterX, coinCenterY, coinRadius * 1.55, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       ctx.fillStyle = "#ffcc33";
       ctx.beginPath();
@@ -3555,6 +3577,10 @@
   }
 
   function renderHud() {
+    if (runtime.hudRefreshClock < HUD_UPDATE_INTERVAL_SEC) {
+      return;
+    }
+    runtime.hudRefreshClock = 0;
     currentStage();
     const missionLabel = runtime.missionDone
       ? "완료"
