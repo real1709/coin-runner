@@ -17,10 +17,11 @@
   const MOBILE_PERF_MODE =
     typeof navigator !== "undefined" &&
     /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
-  const SIDE_PROP_SLOT_COUNT = MOBILE_PERF_MODE ? 2 : 3;
-  const MAX_ACTIVE_COLLECTIBLES = MOBILE_PERF_MODE ? 10 : 18;
-  const MAX_ACTIVE_POISON_SHOTS = MOBILE_PERF_MODE ? 6 : 12;
+  const SIDE_PROP_SLOT_COUNT = MOBILE_PERF_MODE ? 1 : 3;
+  const MAX_ACTIVE_COLLECTIBLES = MOBILE_PERF_MODE ? 8 : 18;
+  const MAX_ACTIVE_POISON_SHOTS = MOBILE_PERF_MODE ? 4 : 12;
   const HUD_UPDATE_INTERVAL_SEC = MOBILE_PERF_MODE ? 0.12 : 0.05;
+  const SPRITE_RENDER_MAX_DIM = MOBILE_PERF_MODE ? 420 : 900;
   const MISSION_SCORE_TARGET = 1200;
   const MISSION_DISTANCE_TARGET = 900;
   const MISSION_COLLECTIBLE_TARGET = 7;
@@ -674,6 +675,7 @@
   const ctx = canvas.getContext("2d");
   const spritePool = {};
   const spriteMeta = {};
+  const spriteRenderPool = {};
   let titleBgm = null;
   let startClickSfx = null;
   let countdownSfx = null;
@@ -746,7 +748,8 @@
       lean: 0,
       bob: 0
     },
-    hudRefreshClock: 0
+    hudRefreshClock: 0,
+    frameToken: 0
   };
 
   const obstacleCatalog = {
@@ -808,6 +811,7 @@
     ) {
       image.addEventListener("load", function () {
         spriteMeta[key] = detectForegroundRect(image);
+        delete spriteRenderPool[key];
       });
     }
     image.src = assetConfig.imageSrc;
@@ -952,13 +956,64 @@
     if (!(image && image.complete && image.naturalWidth > 0)) {
       return false;
     }
-    const crop = spriteMeta[key];
-    const sx = crop ? crop.sx : 0;
-    const sy = crop ? crop.sy : 0;
-    const sw = crop ? crop.sw : image.naturalWidth;
-    const sh = crop ? crop.sh : image.naturalHeight;
-    ctx.drawImage(image, sx, sy, sw, sh, x, y, width, height);
+    const source = getSpriteRenderSource(key, image);
+    if (!source) {
+      return false;
+    }
+    ctx.drawImage(source.image, source.sx, source.sy, source.sw, source.sh, x, y, width, height);
     return true;
+  }
+
+  function getSpriteRenderSource(key, image) {
+    const cached = spriteRenderPool[key];
+    if (cached) {
+      return cached;
+    }
+    const crop = spriteMeta[key];
+    if (!crop) {
+      return {
+        image: image,
+        sx: 0,
+        sy: 0,
+        sw: image.naturalWidth,
+        sh: image.naturalHeight
+      };
+    }
+
+    const sx = crop.sx;
+    const sy = crop.sy;
+    const sw = crop.sw;
+    const sh = crop.sh;
+
+    if (Math.max(sw, sh) <= SPRITE_RENDER_MAX_DIM) {
+      const direct = { image: image, sx: sx, sy: sy, sw: sw, sh: sh };
+      spriteRenderPool[key] = direct;
+      return direct;
+    }
+
+    const scale = SPRITE_RENDER_MAX_DIM / Math.max(sw, sh);
+    const targetW = Math.max(1, Math.round(sw * scale));
+    const targetH = Math.max(1, Math.round(sh * scale));
+    const renderCanvas = document.createElement("canvas");
+    renderCanvas.width = targetW;
+    renderCanvas.height = targetH;
+    const renderCtx = renderCanvas.getContext("2d");
+    if (!renderCtx) {
+      const fallback = { image: image, sx: sx, sy: sy, sw: sw, sh: sh };
+      spriteRenderPool[key] = fallback;
+      return fallback;
+    }
+    renderCtx.imageSmoothingEnabled = true;
+    renderCtx.drawImage(image, sx, sy, sw, sh, 0, 0, targetW, targetH);
+    const downscaled = {
+      image: renderCanvas,
+      sx: 0,
+      sy: 0,
+      sw: targetW,
+      sh: targetH
+    };
+    spriteRenderPool[key] = downscaled;
+    return downscaled;
   }
 
   function isSpriteReady(key) {
@@ -2348,6 +2403,9 @@
   }
 
   function getObstacleDrawInfo(obstacle) {
+    if (obstacle._drawInfoToken === runtime.frameToken && obstacle._drawInfoCache) {
+      return obstacle._drawInfoCache;
+    }
     const renderLane = Number.isFinite(obstacle.visualLane)
       ? obstacle.visualLane
       : obstacle.lane;
@@ -2398,7 +2456,10 @@
     const drawX = projected.x - drawWidth / 2;
     const groundOffsetRatio = Number(obstacle.groundOffsetRatio || 0);
     const drawY = projected.y - drawHeight + drawHeight * groundOffsetRatio;
-    return { projected, drawX, drawY, drawWidth, drawHeight };
+    const info = { projected, drawX, drawY, drawWidth, drawHeight };
+    obstacle._drawInfoToken = runtime.frameToken;
+    obstacle._drawInfoCache = info;
+    return info;
   }
 
   function getObstacleHitbox(obstacle) {
@@ -2439,6 +2500,9 @@
   }
 
   function getCollectibleDrawInfo(item) {
+    if (item._drawInfoToken === runtime.frameToken && item._drawInfoCache) {
+      return item._drawInfoCache;
+    }
     const projected = projectLanePoint(item.lane, item.depth, item.laneOffset);
     const size = centeredDrawSize(
       item.width,
@@ -2457,7 +2521,7 @@
       Math.max(5, drawWidth * 0.42),
       projected.laneWidth * 0.22
     );
-    return {
+    const info = {
       projected,
       drawX,
       drawY,
@@ -2467,6 +2531,9 @@
       coinCenterY,
       coinRadius
     };
+    item._drawInfoToken = runtime.frameToken;
+    item._drawInfoCache = info;
+    return info;
   }
 
   function getPoisonHitCircle(shot) {
@@ -3674,6 +3741,7 @@
       return;
     }
     const frameTime = Number.isFinite(now) ? now : performance.now();
+    runtime.frameToken += 1;
     if (runtime.paused || runtime.countdownActive) {
       runtime.lastFrameTime = frameTime;
       renderRunScene();
