@@ -599,6 +599,12 @@ body {
   transform: translateY(1px);
 }
 
+.pause-toggle-btn:disabled {
+  opacity: 0.58;
+  filter: saturate(0.84);
+  cursor: not-allowed;
+}
+
 .overlay {
   position: absolute;
   top: 18%;

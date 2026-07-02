@@ -11,6 +11,12 @@
   const COUNTDOWN_SFX_VOLUME = 0.4;
   const GO_COUNTDOWN_SFX_SRC = "./assets/count_go.wav";
   const GO_COUNTDOWN_SFX_VOLUME = 0.4;
+  const COIN_SFX_SRC = "./assets/get_coin.mp3?v=20260702_1617";
+  const COIN_SFX_VOLUME = 0.5;
+  const BOOSTER_SFX_SRC = "./assets/booster.mp3?v=20260702_1617";
+  const BOOSTER_SFX_VOLUME = 0.4;
+  const SPEEDUP_SFX_SRC = "./assets/speed_up.wav?v=20260702_1617";
+  const SPEEDUP_SFX_VOLUME = 0.8;
   const INGAME_BGM_SRC = "./assets/run_ingame.mp3?v=20260630_1158";
   const INGAME_BGM_VOLUME = 0.58;
   const INGAME_BGM_START_DELAY_MS = 140;
@@ -42,6 +48,12 @@
   const SPEEDUP_TIME_STEP_SEC = 15;
   const SPEEDUP_BONUS_PER_STEP = 42;
   const SPEEDUP_MAX_BONUS = 360;
+  const JUMP_UNLOCK_LEVEL = 3;
+  const JUMP_DURATION_SEC = 0.56;
+  const JUMP_COOLDOWN_SEC = 0.28;
+  const JUMP_HEIGHT_PX = 78;
+  const JUMP_CLEAR_MIN_RATIO = 0.34;
+  const JUMP_CLEAR_RELEASE_DEPTH = 0.08;
   const OBSTACLE_APPROACH_MULTIPLIER = 1.3;
   const APPROACH_MULTIPLIER_PER_LEVEL = 0.06;
   const APPROACH_MULTIPLIER_MAX_BONUS = 0.42;
@@ -349,6 +361,14 @@
   const USER_KEY = "ip_runner_anonymous_id";
   const NICKNAME_KEY = "ip_runner_player_nickname_v1";
   const TAUNT_KEY = "ip_runner_player_taunt_v1";
+  const REMOTE_LEADERBOARD_ENDPOINT = "/api/leaderboard";
+  const REMOTE_LEADERBOARD_LIMIT = 50;
+  const REMOTE_SYNC_TIMEOUT_MS = 3500;
+  const REMOTE_LEADERBOARD_ENABLED =
+    typeof window !== "undefined" &&
+    typeof fetch === "function" &&
+    typeof location !== "undefined" &&
+    /^https?:$/.test(location.protocol);
   let memoryAnonymousId = null;
   let memoryNickname = "";
   let memoryTaunt = "";
@@ -553,7 +573,7 @@
   }
 
   function persistLeaderboard(entries) {
-    const trimmed = normalizeLeaderboard(entries).slice(0, 20);
+    const trimmed = normalizeLeaderboard(entries).slice(0, REMOTE_LEADERBOARD_LIMIT);
     if (storageEnabled) {
       try {
         localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(trimmed));
@@ -564,6 +584,71 @@
     }
     memoryLeaderboard = trimmed;
     return trimmed;
+  }
+
+  async function requestRemoteLeaderboard(url, method, payload) {
+    if (!REMOTE_LEADERBOARD_ENABLED) {
+      return null;
+    }
+    const controller =
+      typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timerId = controller
+      ? window.setTimeout(function () {
+          controller.abort();
+        }, REMOTE_SYNC_TIMEOUT_MS)
+      : null;
+    try {
+      const response = await fetch(url, {
+        method: method || "GET",
+        headers:
+          payload !== undefined
+            ? {
+                "Content-Type": "application/json"
+              }
+            : undefined,
+        body: payload !== undefined ? JSON.stringify(payload) : undefined,
+        signal: controller ? controller.signal : undefined
+      });
+      if (!response.ok) {
+        throw new Error("remote_leaderboard_http_" + response.status);
+      }
+      return await response.json();
+    } finally {
+      if (timerId) {
+        window.clearTimeout(timerId);
+      }
+    }
+  }
+
+  async function saveLeaderboardEntryRemote(entry) {
+    const payload = await requestRemoteLeaderboard(
+      REMOTE_LEADERBOARD_ENDPOINT,
+      "POST",
+      entry
+    );
+    if (!payload || !Array.isArray(payload.leaderboard)) {
+      return null;
+    }
+    return normalizeLeaderboard(payload.leaderboard).slice(0, REMOTE_LEADERBOARD_LIMIT);
+  }
+
+  async function updateLeaderboardTauntRemote(entryId, tauntText, nicknameText) {
+    if (!entryId) {
+      return null;
+    }
+    const payload = await requestRemoteLeaderboard(
+      REMOTE_LEADERBOARD_ENDPOINT + "/taunt",
+      "POST",
+      {
+        id: entryId,
+        taunt: tauntText || "",
+        nickname: nicknameText || ""
+      }
+    );
+    if (!payload || !Array.isArray(payload.leaderboard)) {
+      return null;
+    }
+    return normalizeLeaderboard(payload.leaderboard).slice(0, REMOTE_LEADERBOARD_LIMIT);
   }
 
   function saveLeaderboardEntry(distance, level) {
@@ -684,6 +769,9 @@
   let startClickSfx = null;
   let countdownSfx = null;
   let goCountdownSfx = null;
+  let coinSfx = null;
+  let boosterSfx = null;
+  let speedupSfx = null;
   let ingameBgm = null;
   let resultBgm = null;
   let titleBgmUnlockBound = false;
@@ -736,6 +824,7 @@
     powerupSpawnAtByTier: {},
     moveLeftQueued: false,
     moveRightQueued: false,
+    jumpQueued: false,
     skillCooldown: 0,
     rushTimer: 0,
     shieldTimer: 0,
@@ -751,7 +840,10 @@
       baseHeight: 70,
       animTime: 0,
       lean: 0,
-      bob: 0
+      bob: 0,
+      jumpTimer: 0,
+      jumpCooldown: 0,
+      jumpOffset: 0
     },
     hudRefreshClock: 0,
     frameToken: 0
@@ -770,6 +862,7 @@
       height: 40,
       color: "#4f84ad",
       lane: "ground",
+      jumpable: true,
       groundOffsetRatio: 0.15,
       laneWidthRatio: 0.9,
       sizeScale: 1,
@@ -780,6 +873,7 @@
       height: 58,
       color: "#52789a",
       lane: "ground",
+      jumpable: true,
       groundOffsetRatio: 0.12,
       laneWidthRatio: 0.8,
       sizeScale: 1.2,
@@ -1304,6 +1398,93 @@
     audio.setAttribute("playsinline", "true");
     goCountdownSfx = audio;
     return goCountdownSfx;
+  }
+
+  function ensureCoinSfx() {
+    if (coinSfx) {
+      return coinSfx;
+    }
+    const audio = new Audio(COIN_SFX_SRC);
+    audio.preload = "auto";
+    audio.volume = COIN_SFX_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    coinSfx = audio;
+    return coinSfx;
+  }
+
+  function playCoinSfx() {
+    const audio = ensureCoinSfx();
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch (_err) {
+      // Ignore seeks before metadata is loaded.
+    }
+    audio.volume = COIN_SFX_VOLUME;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Ignore audio playback rejections.
+      });
+    }
+  }
+
+  function ensureBoosterSfx() {
+    if (boosterSfx) {
+      return boosterSfx;
+    }
+    const audio = new Audio(BOOSTER_SFX_SRC);
+    audio.preload = "auto";
+    audio.volume = BOOSTER_SFX_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    boosterSfx = audio;
+    return boosterSfx;
+  }
+
+  function playBoosterSfx() {
+    const audio = ensureBoosterSfx();
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch (_err) {
+      // Ignore seeks before metadata is loaded.
+    }
+    audio.volume = BOOSTER_SFX_VOLUME;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Ignore audio playback rejections.
+      });
+    }
+  }
+
+  function ensureSpeedupSfx() {
+    if (speedupSfx) {
+      return speedupSfx;
+    }
+    const audio = new Audio(SPEEDUP_SFX_SRC);
+    audio.preload = "auto";
+    audio.volume = SPEEDUP_SFX_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    speedupSfx = audio;
+    return speedupSfx;
+  }
+
+  function playSpeedupSfx() {
+    const audio = ensureSpeedupSfx();
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch (_err) {
+      // Ignore seeks before metadata is loaded.
+    }
+    audio.volume = SPEEDUP_SFX_VOLUME;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Ignore audio playback rejections.
+      });
+    }
   }
 
   function ensureIngameBgm() {
@@ -1881,6 +2062,7 @@
     runtime.powerupSpawnAtByTier = {};
     runtime.moveLeftQueued = false;
     runtime.moveRightQueued = false;
+    runtime.jumpQueued = false;
     runtime.skillCooldown = 0;
     runtime.rushTimer = 0;
     runtime.shieldTimer = 0;
@@ -1900,6 +2082,9 @@
     player.animTime = 0;
     player.lean = 0;
     player.bob = 0;
+    player.jumpTimer = 0;
+    player.jumpCooldown = 0;
+    player.jumpOffset = 0;
   }
 
   function queueMoveLeft() {
@@ -1914,6 +2099,16 @@
       return;
     }
     runtime.moveRightQueued = true;
+  }
+
+  function queueJump() {
+    if (!runtime.running || runtime.paused || runtime.countdownActive) {
+      return;
+    }
+    if (!isJumpUnlocked()) {
+      return;
+    }
+    runtime.jumpQueued = true;
   }
 
   function runSkill() {
@@ -1960,10 +2155,22 @@
     if (!pauseToggleButton) {
       return;
     }
-    const isPaused = runtime.running && runtime.paused;
-    pauseToggleButton.textContent = isPaused ? "PLAY" : "PAUSE";
-    pauseToggleButton.setAttribute("aria-label", isPaused ? "Play" : "Pause");
-    pauseToggleButton.classList.toggle("is-paused", isPaused);
+    const player = runtime.player;
+    const locked = !isJumpUnlocked();
+    const jumping = player.jumpTimer > 0.01;
+    const cooling = player.jumpCooldown > 0.01;
+    const blocked = !runtime.running || runtime.paused || runtime.countdownActive;
+    const disabled = blocked || locked || jumping || cooling;
+    let label = "점프";
+    if (locked) {
+      label = "점프(3단계)";
+    } else if (jumping) {
+      label = "점프중";
+    }
+    pauseToggleButton.textContent = label;
+    pauseToggleButton.setAttribute("aria-label", label);
+    pauseToggleButton.disabled = disabled;
+    pauseToggleButton.classList.toggle("is-paused", false);
   }
 
   function togglePause() {
@@ -2058,11 +2265,27 @@
   function submitResultTaunt() {
     const safeTaunt = sanitizeTaunt(resultTauntInput ? resultTauntInput.value : "");
     playerTaunt = persistPlayerTaunt(safeTaunt);
+    const savedTaunt = playerTaunt;
     if (latestResultEntryId) {
-      applyTauntToEntry(latestResultEntryId, playerTaunt);
+      applyTauntToEntry(latestResultEntryId, savedTaunt);
       setResultTauntHint("저장 완료");
     } else {
       setResultTauntHint("저장 완료");
+    }
+    if (latestResultEntryId && REMOTE_LEADERBOARD_ENABLED) {
+      setResultTauntHint("저장 완료 (공용 반영 중...)");
+      updateLeaderboardTauntRemote(latestResultEntryId, savedTaunt, playerNickname)
+        .then(function (remoteBoard) {
+          if (!remoteBoard || remoteBoard.length === 0) {
+            return;
+          }
+          persistLeaderboard(remoteBoard);
+          renderResultRanking(remoteBoard, latestResultEntryId);
+          setResultTauntHint("저장 완료");
+        })
+        .catch(function () {
+          setResultTauntHint("저장 완료 (공용 반영 대기)");
+        });
     }
     playerTaunt = persistPlayerTaunt("");
     if (resultTauntInput) {
@@ -2090,6 +2313,30 @@
     return Math.floor(safeElapsed / SPEEDUP_TIME_STEP_SEC);
   }
 
+  function currentLevel() {
+    return Math.max(1, runtime.speedTier + 1);
+  }
+
+  function isJumpUnlocked() {
+    return currentLevel() >= JUMP_UNLOCK_LEVEL;
+  }
+
+  function jumpPeakHeightPx() {
+    return JUMP_HEIGHT_PX * Math.max(0.9, Math.min(1.2, canvas.height / 640));
+  }
+
+  function jumpClearMinHeightPx() {
+    return jumpPeakHeightPx() * JUMP_CLEAR_MIN_RATIO;
+  }
+
+  function canJumpOverObstacle(obstacle) {
+    return (
+      obstacle &&
+      obstacle.jumpable &&
+      runtime.player.jumpOffset >= jumpClearMinHeightPx()
+    );
+  }
+
   function currentSurvivalDecayPerSec() {
     const speedTier = Number.isFinite(runtime.speedTier) ? runtime.speedTier : 0;
     return SURVIVAL_DECAY_PER_SEC + speedTier * SURVIVAL_DECAY_PER_LEVEL;
@@ -2111,6 +2358,7 @@
     runtime.score += BOOSTER_BASE_SCORE;
     runtime.survivalGauge = Math.min(SURVIVAL_MAX, runtime.survivalGauge + 10);
     showOverlay("무한 부스터!!", 900, "top");
+    playBoosterSfx();
     emitTelemetry("collect_booster", {
       characterId: character.id,
       stageId: runtime.speedTier + 1,
@@ -2128,6 +2376,14 @@
       speedTier * APPROACH_MULTIPLIER_PER_LEVEL
     );
     return OBSTACLE_APPROACH_MULTIPLIER * (1 + levelBonus);
+  }
+
+  function nextObstacleSpawnGap(stage) {
+    const baseGap = randomRange(stage.spawnPattern.minGap, stage.spawnPattern.maxGap);
+    const speedTier = Number.isFinite(runtime.speedTier) ? runtime.speedTier : 0;
+    const tierCompression =
+      speedTier <= 2 ? 1 : Math.max(0.48, 1 - (speedTier - 2) * 0.05);
+    return Math.max(0.34, baseGap * tierCompression);
   }
 
   function currentCollectibleApproachMultiplier() {
@@ -2252,11 +2508,14 @@
       height: base.height,
       color: base.color,
       moveLane: base.lane,
+      jumpable: !!base.jumpable,
       groundOffsetRatio: Number(base.groundOffsetRatio || 0),
       laneWidthRatio: Number(base.laneWidthRatio || 0),
       sizeScale: Number(base.sizeScale || 1),
       heightScale: Number(base.heightScale || 1),
       spitDone: false,
+      jumpCleared: false,
+      jumpClearDepth: -Infinity,
       passed: false,
       wobble: Math.random() * Math.PI * 2
     });
@@ -2618,6 +2877,21 @@
     const player = runtime.player;
     const feel = speedFeel();
     player.animTime += dt * runnerTempo();
+    player.jumpTimer = Math.max(0, player.jumpTimer - dt);
+    player.jumpCooldown = Math.max(0, player.jumpCooldown - dt);
+    if (runtime.jumpQueued) {
+      runtime.jumpQueued = false;
+      if (isJumpUnlocked() && player.jumpTimer <= 0 && player.jumpCooldown <= 0) {
+        player.jumpTimer = JUMP_DURATION_SEC;
+        player.jumpCooldown = JUMP_COOLDOWN_SEC;
+        emitTelemetry("jump_start", {
+          characterId: selectedCharacter().id,
+          stageId: runtime.speedTier + 1,
+          distance: Math.round(runtime.distanceMeters)
+        });
+        updatePauseToggleButton();
+      }
+    }
     const prevLane = player.lane;
 
     if (runtime.moveLeftQueued) {
@@ -2643,8 +2917,12 @@
     player.x += laneDrift * Math.min(1, dt * 13.5);
     player.lean += ((laneDrift / 26) - player.lean) * Math.min(1, dt * 9.5);
     const runPose = getRunnerPose(player);
+    const jumpProgress =
+      player.jumpTimer > 0 ? 1 - player.jumpTimer / JUMP_DURATION_SEC : 0;
+    const jumpWave = jumpProgress > 0 ? Math.sin(Math.PI * jumpProgress) : 0;
+    player.jumpOffset = jumpWave * jumpPeakHeightPx();
     player.bob = runPose.y * (0.85 + feel * 0.28);
-    player.y = playerBaseY() - player.height + player.bob;
+    player.y = playerBaseY() - player.height + player.bob - player.jumpOffset;
     player.height = player.baseHeight;
   }
 
@@ -2674,6 +2952,22 @@
     syncResultTauntEditor();
     switchScene(sceneResult);
     applyShareVariant();
+    if (REMOTE_LEADERBOARD_ENABLED) {
+      setResultTauntHint("공용 랭킹 동기화 중...");
+      saveLeaderboardEntryRemote(ranking.entry)
+        .then(function (remoteBoard) {
+          if (!remoteBoard || remoteBoard.length === 0) {
+            setResultTauntHint("저장하면 현재 기록에 반영돼");
+            return;
+          }
+          persistLeaderboard(remoteBoard);
+          renderResultRanking(remoteBoard, ranking.entry.id);
+          setResultTauntHint("공용 랭킹 반영 완료");
+        })
+        .catch(function () {
+          setResultTauntHint("네트워크 문제로 로컬 기록만 표시 중");
+        });
+    }
   }
 
   function updateRun(dt) {
@@ -2726,6 +3020,8 @@
     if (nextSpeedTier > runtime.speedTier) {
       runtime.speedTier = nextSpeedTier;
       showOverlay("스피드 업!!", 950, "top");
+      playSpeedupSfx();
+      updatePauseToggleButton();
       emitTelemetry("speed_up", {
         characterId: character.id,
         stageId: runtime.speedTier + 1,
@@ -2741,7 +3037,7 @@
     runtime.spawnTimer += dt;
     if (runtime.spawnTimer >= runtime.spawnIn) {
       runtime.spawnTimer = 0;
-      runtime.spawnIn = randomRange(stage.spawnPattern.minGap, stage.spawnPattern.maxGap);
+      runtime.spawnIn = nextObstacleSpawnGap(stage);
       spawnObstacle();
     }
 
@@ -2850,6 +3146,7 @@
           SURVIVAL_MAX,
           runtime.survivalGauge + coinCount * SURVIVAL_GAIN_PER_COIN
         );
+        playCoinSfx();
         emitTelemetry("collect_ip_token", {
           characterId: character.id,
           stageId: runtime.speedTier + 1,
@@ -2894,10 +3191,26 @@
     }
 
     const hitObstacle = runtime.obstacles.find(function (obstacle) {
+      if (obstacle.jumpCleared) {
+        return false;
+      }
       return rectsOverlap(getObstacleHitbox(obstacle, false), playerHitbox);
     });
 
-    if (hitObstacle && isBoosterActive()) {
+    if (hitObstacle && canJumpOverObstacle(hitObstacle)) {
+      if (!hitObstacle.jumpCleared) {
+        hitObstacle.jumpCleared = true;
+        hitObstacle.jumpClearDepth = hitObstacle.depth;
+        runtime.score += 90;
+        emitTelemetry("jump_clear_obstacle", {
+          characterId: character.id,
+          stageId: runtime.speedTier + 1,
+          distance: Math.round(runtime.distanceMeters),
+          obstacleType: hitObstacle.type,
+          score: Math.round(runtime.score)
+        });
+      }
+    } else if (hitObstacle && isBoosterActive()) {
       hitObstacle.passed = true;
       runtime.score += 140;
       emitTelemetry("booster_break_obstacle", {
@@ -2926,6 +3239,14 @@
     });
 
     runtime.obstacles.forEach(function (obstacle) {
+      if (obstacle.jumpCleared) {
+        const clearDepth = Number.isFinite(obstacle.jumpClearDepth)
+          ? obstacle.jumpClearDepth
+          : obstacle.depth;
+        if (obstacle.depth < clearDepth + JUMP_CLEAR_RELEASE_DEPTH) {
+          return;
+        }
+      }
       if (
         !obstacle.passed &&
         isPastFinishLine(obstacle.lane, obstacle.depth, obstacle.laneOffset, 0)
@@ -3067,10 +3388,14 @@
     const player = runtime.player;
     const runPose = getRunnerPose(player);
     const playerCenterX = player.x + player.width * 0.5;
-    const shadowY = player.y + player.height * 0.96;
-    const shadowW = (17 + runtime.scrollSpeedNorm * 28) * runPose.shadowW;
-    const shadowH = (6 + runtime.scrollSpeedNorm * 8) * runPose.shadowH;
-    ctx.fillStyle = "rgba(12, 20, 35, " + runPose.shadowAlpha.toFixed(3) + ")";
+    const jumpRatio = Math.max(0, Math.min(1, player.jumpOffset / jumpPeakHeightPx()));
+    const shadowY = playerBaseY() - 2 + runPose.y * 0.12;
+    const shadowW =
+      (17 + runtime.scrollSpeedNorm * 28) * runPose.shadowW * (1 - jumpRatio * 0.34);
+    const shadowH =
+      (6 + runtime.scrollSpeedNorm * 8) * runPose.shadowH * (1 - jumpRatio * 0.38);
+    const shadowAlpha = runPose.shadowAlpha * (1 - jumpRatio * 0.62);
+    ctx.fillStyle = "rgba(12, 20, 35, " + shadowAlpha.toFixed(3) + ")";
     ctx.beginPath();
     ctx.ellipse(playerCenterX + runPose.x * 0.45, shadowY, shadowW, shadowH, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -3759,6 +4084,7 @@
     hudMission.textContent = missionLabel;
     hudSkill.textContent =
       runtime.skillCooldown > 0 ? runtime.skillCooldown.toFixed(1) + "s" : "준비됨";
+    updatePauseToggleButton();
 
     const survivalRatio = Math.max(0, Math.min(1, runtime.survivalGauge / SURVIVAL_MAX));
     if (survivalFill) {
@@ -3798,6 +4124,7 @@
     cancelCountdown(false);
     runtime.countdownActive = true;
     runtime.lastFrameTime = performance.now();
+    updatePauseToggleButton();
 
     [
       { text: "3", delay: 0, duration: 820 },
@@ -3814,6 +4141,7 @@
           playGoCountdownSfx();
           runtime.countdownActive = false;
           runtime.lastFrameTime = performance.now();
+          updatePauseToggleButton();
           queueIngameBgmAfterGo();
         }
       }, step.delay);
@@ -3974,7 +4302,7 @@
     if (pauseToggleButton) {
       pauseToggleButton.addEventListener("click", function (event) {
         event.preventDefault();
-        togglePause();
+        queueJump();
       });
     }
 
@@ -3998,13 +4326,6 @@
       if (!runtime.running) {
         return;
       }
-      if (event.code === "KeyP") {
-        event.preventDefault();
-        if (!event.repeat) {
-          togglePause();
-        }
-        return;
-      }
       if (runtime.paused) {
         return;
       }
@@ -4017,6 +4338,11 @@
         event.preventDefault();
         if (!event.repeat) {
           queueMoveRight();
+        }
+      } else if (event.code === "Space" || event.code === "ArrowUp") {
+        event.preventDefault();
+        if (!event.repeat) {
+          queueJump();
         }
       } else if (event.code === "KeyE") {
         runSkill();
@@ -4069,6 +4395,9 @@
       ensureStartClickSfx();
       ensureCountdownSfx();
       ensureGoCountdownSfx();
+      ensureCoinSfx();
+      ensureBoosterSfx();
+      ensureSpeedupSfx();
       ensureIngameBgm();
       ensureResultBgm();
       syncResultTauntEditor();
