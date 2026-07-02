@@ -14,6 +14,8 @@
   const INGAME_BGM_SRC = "./assets/run_ingame.mp3?v=20260630_1158";
   const INGAME_BGM_VOLUME = 0.58;
   const INGAME_BGM_START_DELAY_MS = 140;
+  const RESULT_BGM_SRC = "./assets/runner_end.mp3?v=20260702_1318";
+  const RESULT_BGM_VOLUME = 0.62;
   const MOBILE_PERF_MODE =
     typeof navigator !== "undefined" &&
     /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
@@ -683,6 +685,7 @@
   let countdownSfx = null;
   let goCountdownSfx = null;
   let ingameBgm = null;
+  let resultBgm = null;
   let titleBgmUnlockBound = false;
   let titleBgmUnmuteTimer = null;
   let ingameBgmStartTimer = null;
@@ -1316,6 +1319,19 @@
     return ingameBgm;
   }
 
+  function ensureResultBgm() {
+    if (resultBgm) {
+      return resultBgm;
+    }
+    const audio = new Audio(RESULT_BGM_SRC);
+    audio.loop = true;
+    audio.preload = "auto";
+    audio.volume = RESULT_BGM_VOLUME;
+    audio.setAttribute("playsinline", "true");
+    resultBgm = audio;
+    return resultBgm;
+  }
+
   function playGoCountdownSfx() {
     const audio = ensureGoCountdownSfx();
     audio.pause();
@@ -1369,6 +1385,39 @@
     if (resetPosition) {
       try {
         ingameBgm.currentTime = 0;
+      } catch (_err) {
+        // Ignore seeks before metadata is loaded.
+      }
+    }
+  }
+
+  function playResultBgm(resetPosition) {
+    const audio = ensureResultBgm();
+    if (resetPosition) {
+      audio.pause();
+      try {
+        audio.currentTime = 0;
+      } catch (_err) {
+        // Ignore seeks before metadata is loaded.
+      }
+    }
+    audio.volume = RESULT_BGM_VOLUME;
+    const playAttempt = audio.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch(function () {
+        // Ignore audio playback rejections.
+      });
+    }
+  }
+
+  function stopResultBgm(resetPosition) {
+    if (!resultBgm) {
+      return;
+    }
+    resultBgm.pause();
+    if (resetPosition) {
+      try {
+        resultBgm.currentTime = 0;
       } catch (_err) {
         // Ignore seeks before metadata is loaded.
       }
@@ -1492,12 +1541,15 @@
     target.classList.add("scene-active");
     if (target === sceneStart) {
       stopIngameBgm(true);
+      stopResultBgm(true);
       playTitleBgm(true);
     } else if (target === sceneGame) {
       stopTitleBgm(false);
+      stopResultBgm(true);
     } else {
       stopTitleBgm(false);
       stopIngameBgm(true);
+      playResultBgm(true);
     }
   }
 
@@ -4018,6 +4070,7 @@
       ensureCountdownSfx();
       ensureGoCountdownSfx();
       ensureIngameBgm();
+      ensureResultBgm();
       syncResultTauntEditor();
       bindInput();
       document.addEventListener("visibilitychange", function () {
